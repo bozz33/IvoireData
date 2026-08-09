@@ -10,11 +10,12 @@ from urllib.robotparser import RobotFileParser
 from ..cleaning import clean_text
 
 _SKIP_EXTENSIONS = {
-    ".7z", ".avi", ".bin", ".bmp", ".css", ".doc", ".docx", ".exe", ".gif",
+    ".7z", ".avi", ".bin", ".bmp", ".css", ".doc", ".docx", ".dta", ".exe", ".gif",
     ".gz", ".ico", ".jpeg", ".jpg", ".js", ".mp3", ".mp4", ".odt", ".pbf",
-    ".png", ".ppt", ".pptx", ".rar", ".svg", ".tar", ".webp", ".woff",
-    ".woff2", ".zip",
+    ".png", ".por", ".ppt", ".pptx", ".rar", ".rdata", ".rds", ".sas7bdat", ".sav",
+    ".svg", ".tar", ".webp", ".woff", ".woff2", ".xpt", ".zip",
 }
+_METADATA_DENY_TOKENS = ("download", "microdata", "datafile", "data-file", "get-microdata", "get_microdata")
 
 
 class _HTMLTextAndLinks(HTMLParser):
@@ -65,7 +66,7 @@ def chunk_text(text: str, size: int = 3500, overlap: int = 250):
         start = max(start + 1, end - overlap)
 
 
-def _same_host_links(base_url: str, hrefs: list[str]) -> list[str]:
+def _same_host_links(base_url: str, hrefs: list[str], *, metadata_only: bool = False) -> list[str]:
     host = (urlparse(base_url).hostname or "").lower()
     out: list[str] = []
     for href in hrefs:
@@ -78,6 +79,10 @@ def _same_host_links(base_url: str, hrefs: list[str]) -> list[str]:
         path = parsed.path.lower()
         if any(path.endswith(ext) for ext in _SKIP_EXTENSIONS):
             continue
+        if metadata_only:
+            target = (parsed.path + "?" + parsed.query).lower()
+            if any(token in target for token in _METADATA_DENY_TOKENS):
+                continue
         out.append(candidate)
     return out
 
@@ -102,7 +107,7 @@ def _robots_allowed(session, url: str, user_agent: str, cache: dict[str, RobotFi
     return True if parser is None else parser.can_fetch(user_agent, url)
 
 
-def public_document_resource(*, source_id: str, url: str, user_agent: str = "IvoireData/0.4", force: bool = False, crawl: bool = False, max_pages: int = 1, max_bytes: int = 20_000_000):
+def public_document_resource(*, source_id: str, url: str, user_agent: str = "IvoireData/0.5", force: bool = False, crawl: bool = False, max_pages: int = 1, max_bytes: int = 20_000_000, metadata_only: bool = False):
     import dlt
     import requests
     from pypdf import PdfReader
@@ -123,6 +128,11 @@ def public_document_resource(*, source_id: str, url: str, user_agent: str = "Ivo
             if current in seen:
                 continue
             seen.add(current)
+            if metadata_only:
+                parsed_current = urlparse(current)
+                target = (parsed_current.path + "?" + parsed_current.query).lower()
+                if current != url and any(token in target for token in _METADATA_DENY_TOKENS):
+                    continue
             if not _robots_allowed(session, current, user_agent, robots_cache):
                 continue
             response = session.get(current, timeout=120, headers={"User-Agent": user_agent})
@@ -141,7 +151,7 @@ def public_document_resource(*, source_id: str, url: str, user_agent: str = "Ivo
             elif "html" in ctype or raw.lstrip().startswith(b"<"):
                 text, hrefs = html_text_and_links(raw)
                 if crawl:
-                    links = _same_host_links(current, hrefs)
+                    links = _same_host_links(current, hrefs, metadata_only=metadata_only)
             elif any(token in ctype for token in ("json", "xml", "text/")):
                 text = clean_text(raw.decode("utf-8", "replace"))
             else:
@@ -149,7 +159,7 @@ def public_document_resource(*, source_id: str, url: str, user_agent: str = "Ivo
             if force or state.get(current) != digest:
                 for idx, chunk in enumerate(chunk_text(text)):
                     chunk_id = hashlib.sha256(f"{source_id}|{current}|{digest}|{idx}".encode()).hexdigest()
-                    yield {"chunk_id": chunk_id, "source_id": source_id, "source_url": current, "content_sha256": digest, "chunk_index": idx, "text": chunk}
+                    yield {"chunk_id": chunk_id, "source_id": source_id, "source_url": current, "content_sha256": digest, "chunk_index": idx, "metadata_only": metadata_only, "text": chunk}
                 state[current] = digest
             for candidate in links:
                 if candidate not in seen:
