@@ -10,6 +10,7 @@ from .connectors.ilostat import ilostat_ref_area_resource
 from .connectors.osm_geofabrik import geofabrik_snapshot_resource
 from .connectors.public_web import public_document_resource
 from .connectors.world_bank import world_bank_wdi_resource
+from .connectors.world_bank_projects import world_bank_projects_resource
 from .delivery import ensure_source_layout, rebuild_catalog, write_source_manifest
 from .freshness import FreshnessStore
 from .models import SourceSpec, SyncResult
@@ -38,10 +39,12 @@ class IvoireDataEngine:
             return http_file_resource(source_id=spec.source_id, url=spec.source_url, force=force, user_agent=self.settings.user_agent, snapshot_dir=p["raw"])
         if spec.connector == "world_bank_wdi":
             return world_bank_wdi_resource(country=str(o.get("country", "CIV")), source=int(o.get("source", 2)), indicator_limit=o.get("indicator_limit"), batch_size=int(o.get("batch_size", 60)), user_agent=self.settings.user_agent, snapshot_dir=p["raw"])
+        if spec.connector == "world_bank_projects":
+            return world_bank_projects_resource(country_code=str(o.get("country_code", "CI")), page_size=int(o.get("page_size", 50)), user_agent=self.settings.user_agent, snapshot_dir=p["raw"])
         if spec.connector == "geoboundaries":
             return geoboundaries_resource(api_url=spec.source_url, source_id=spec.source_id, user_agent=self.settings.user_agent)
         if spec.connector == "ilostat_ref_area":
-            return ilostat_ref_area_resource(country=str(o.get("country", "CIV")), frequencies=o.get("frequencies", ["A"]), base_url=str(o.get("base_url", "https://rplumber.ilo.org/files/ref_area")), user_agent=self.settings.user_agent, snapshot_dir=p["raw"])
+            return ilostat_ref_area_resource(country=str(o.get("country", "CIV")), frequencies=o.get("frequencies", ["A"]), base_url=str(o.get("base_url", "https://rplumber.ilo.org/data/indicator")), user_agent=self.settings.user_agent, snapshot_dir=p["raw"])
         if spec.connector == "osm_geofabrik":
             return geofabrik_snapshot_resource(page_url=spec.source_url, output_dir=p["raw"], source_id=spec.source_id, format=str(o.get("format", "pbf")), user_agent=self.settings.user_agent)
         if spec.connector == "bulk_catalog":

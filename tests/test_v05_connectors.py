@@ -49,7 +49,7 @@ def test_local_settings_create_file_uri(tmp_path: Path):
 
 
 def test_runtime_connectors_are_declared():
-    allowed = {"data_gouv_ci", "world_bank_wdi", "geoboundaries", "ilostat_ref_area", "osm_geofabrik", "bulk_catalog", "public_web", "http_file"}
+    allowed = {"data_gouv_ci", "world_bank_wdi", "world_bank_projects", "geoboundaries", "ilostat_ref_area", "osm_geofabrik", "bulk_catalog", "public_web", "http_file"}
     assert {"ilostat_ref_area", "osm_geofabrik", "bulk_catalog"} <= allowed
 
 
@@ -114,29 +114,19 @@ def test_world_bank_wdi_bisects_400_batches(monkeypatch):
     assert any(r.get("indicator", {}).get("id") == "OK" for r in rows)
 
 
-def test_ilostat_rds_parse_is_isolated_in_subprocess():
-    # _read_rds_rows doit lever RdsParseError (et non segfault le process) si le
-    # subprocess pyreadr crash (exit 139).
-    from ivoiredata.connectors.ilostat import _read_rds_rows, RdsParseError
-    import subprocess
-    from pathlib import Path
-
-    class _FakeCompleted:
-        returncode = 139  # SIGSEGV
-        stdout = ""
-        stderr = ""
-
+def test_ilostat_uses_csv_backend_not_rds():
+    # Le connecteur ILOSTAT privilégie désormais le backend CSV (/data/indicator) qui ne
+    # dépend pas de pyreadr/librdata (instable : SIGSEGV). L'ancien chemin RDS est désactivé
+    # et doit lever RdsParseError pour préserver la compatibilité.
+    import inspect
     from ivoiredata.connectors import ilostat
-    orig = subprocess.run
-    subprocess.run = lambda *a, **k: _FakeCompleted()
-    try:
-        try:
-            list(_read_rds_rows(Path("x.rds")))
-            assert False, "devrait lever RdsParseError"
-        except RdsParseError as exc:
-            assert "segfaulted" in str(exc)
-    finally:
-        subprocess.run = orig
+
+    # Le connecteur expose bien le CSV backend par défaut.
+    sig = inspect.signature(ilostat.ilostat_ref_area_resource)
+    assert sig.parameters["base_url"].default == ilostat.CSV_BASE
+    # _read_rds_rows (legacy) lève systématiquement RdsParseError.
+    with __import__("pytest").raises(ilostat.RdsParseError):
+        list(ilostat._read_rds_rows(__import__("pathlib").Path("x.rds")))
 
 
 def test_datagouv_dataset_id_extracted_from_slug_url():
