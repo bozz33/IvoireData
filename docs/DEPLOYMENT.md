@@ -1,54 +1,74 @@
-# Déploiement local
+# Déploiement local — v0.5.0
 
-IvoireData v0.4.1 stocke toutes les données sur la machine qui exécute le moteur. Aucun stockage S3/R2/MinIO n'est nécessaire.
+IvoireData stocke toutes les données sur la machine qui exécute le moteur. Aucun S3/R2/MinIO ni serveur PostgreSQL n’est requis pour la V1.
 
 ## Installation Python
 
 ```bash
 python -m pip install -e '.[dev,training]'
+ivoiredata coverage
 ivoiredata sources --public
-ivoiredata sync civ_datagouv_catalog
 ivoiredata status --public
 ```
 
-Par défaut :
+Première synchronisation recommandée :
 
-```text
-data_lake/          données dlt
-.ivoiredata/state/  état de fraîcheur/checkpoints
-corpora/            corpus versionnés
-tokenizer/          tokenizer local
+```bash
+ivoiredata sync civ_datagouv_catalog
+ivoiredata sync civ_worldbank_wdi
+ivoiredata sync civ_ilostat
+ivoiredata sync civ_geoboundaries
 ```
 
-Pour changer le dossier de données :
+## Dossiers
+
+```text
+data_lake/             tables dlt
+  raw_external/        OSM et gros fichiers sélectionnés
+.ivoiredata/state/     fraîcheur/checkpoints
+corpora/               corpus versionnés
+tokenizer/             tokenizer local
+```
+
+Changer les chemins :
 
 ```text
 IVOIREDATA_DATA_DIR=D:/IvoireData/data_lake
 IVOIREDATA_STATE_DIR=D:/IvoireData/state
 ```
 
-## Mise à jour automatique locale
+## Mise à jour automatique
 
-Test unique :
+Une passe :
 
 ```bash
 ivoiredata scheduler --once
 ```
 
-Processus continu, vérification toutes les heures :
+Processus continu :
 
 ```bash
 ivoiredata scheduler --interval 3600
 ```
 
-Le scheduler respecte `refresh_hours` et ne synchronise que les sources arrivées à échéance.
+Le scheduler se réveille toutes les heures mais respecte le `refresh_hours` propre à chaque source.
 
-### Windows
+## Windows
 
-Après installation de `ivoiredata`, le script `scripts/install_windows_scheduler.ps1` peut créer une tâche Windows horaire :
+Après installation :
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/install_windows_scheduler.ps1
+```
+
+La tâche Windows doit démarrer dans le dossier du projet ou utiliser des variables d’environnement avec des chemins absolus.
+
+## Linux
+
+Le plus simple est un service systemd ou un processus supervisé exécutant :
+
+```bash
+ivoiredata scheduler --interval 3600
 ```
 
 ## API locale
@@ -57,7 +77,7 @@ powershell -ExecutionPolicy Bypass -File scripts/install_windows_scheduler.ps1
 uvicorn ivoiredata.api:app --host 127.0.0.1 --port 8000
 ```
 
-L'API reste locale sur `http://127.0.0.1:8000`.
+N’utiliser `0.0.0.0` que si l’API doit être accessible depuis le LAN et après avoir configuré le pare-feu.
 
 ## Docker local
 
@@ -65,4 +85,10 @@ L'API reste locale sur `http://127.0.0.1:8000`.
 docker compose up --build
 ```
 
-Docker monte directement `data_lake/`, `.ivoiredata/`, `corpora/` et `tokenizer/` depuis le PC. Aucun service de stockage externe n'est démarré.
+Docker monte directement les dossiers locaux du projet. Il ne lance aucun stockage externe.
+
+## Sauvegarde
+
+GitHub ne contient pas les données. Sauvegarder `data_lake/`, `.ivoiredata/`, `corpora/` et `tokenizer/` sur un autre disque.
+
+Voir aussi [`OPERATIONS.md`](OPERATIONS.md) et [`STORAGE.md`](STORAGE.md).
