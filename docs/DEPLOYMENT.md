@@ -165,13 +165,23 @@ docker run --rm -v "$PWD:/app" -w /app --entrypoint sh ivoiredata:0.5.0 \
 ### Sources connues en échec (problèmes serveur, non bugs moteur)
 
 Ces sources peuvent échouer lors d'une synchro complète pour des raisons externes.
-Elles sont marquées en `error` dans l'état de fraîcheur sans interrompre le reste de la synchro :
+Elles sont marquées en `error` dans l'état de fraîcheur sans interrompre le reste de la synchro ;
+le scheduler les réessaiera au prochain cycle (mécanisme stale : la dernière version valide
+est conservée tant que la source reste en erreur).
 
-- `civ_anstat_nada` : `nada.anstat.ci` injoignable (SSL / connexion refusée).
-- `civ_ilostat` : `pyreadr`/`librdata` segfault sur le `.rds` CIV (lib C tierce). Le parsing est
-  isolé dans un subprocess dédié, le snapshot brut est conservé pour un connecteur spécialisé.
-- `civ_worldbank_projects` : URL source pointant vers la racine de l'API WB (pas de page HTML).
-  À remplacer par un connecteur dédié (voir `ADDING_SOURCE.md`).
+- `civ_treasury_debt` : `tresor.gouv.ci` peut renvoyer 500 Internal Server Error ou avoir un
+  certificat SSL invalide (`verify_ssl: false` activé dans la config). Problème serveur temporaire.
+- `civ_anstat_nada` : `nada.anstat.ci` a un certificat SSL incomplet (`verify_ssl: false` activé).
+  Si le serveur est injoignable, la source reste en erreur jusqu'au retour du service.
+- `civ_faostat` / `civ_uis` : marquées `success` mais `CATALOG_ONLY` ne produit pas de données
+  exploitables (la page source est une SPA JS sans liens bulk). Connecteur spécialisé à construire
+  (voir `SOURCE_COVERAGE.md`, roadmap point 2).
+
+Les sources précédemment problématiques sont résolues :
+- `civ_ilostat` : backend CSV officiel `/data/indicator?ref_area=CIV` (abandon du RDS/pyreadr).
+- `civ_worldbank_projects` : connecteur API dédié `search.worldbank.org` (192 projets CIV).
+- `civ_geoboundaries` : exploration ADM0–5 (directory listing HTML).
+- `civ_customs` / `civ_health_e_depps` : crawler résilient aux liens morts.
 
 ## Sauvegarde
 

@@ -27,7 +27,7 @@ Toutes les sorties v0.6 sont rangées sous `data_lake/domains/<domain>/<source_i
 | Finance | BCEAO/APIF | **WEB_DOCUMENTS** actuellement |
 | Agriculture nationale | data.gouv.ci + Ministère Agriculture | **FULL_STRUCTURED + WEB_DOCUMENTS** |
 | Agriculture internationale | FAOSTAT | **CATALOG_ONLY** par défaut ; payloads via sélection `download_patterns` |
-| Travail/emploi | ILOSTAT | **FULL_STRUCTURED** : RDS CIV + Parquet |
+| Travail/emploi | ILOSTAT | **FULL_STRUCTURED** : backend CSV `/data/indicator?ref_area=CIV` + Parquet |
 | Santé nationale | RASS/E-DEPPS | **WEB_DOCUMENTS** |
 | Santé internationale | WHO | **WEB_DOCUMENTS** tant que l'interface structurée actuelle n'est pas validée |
 | Éducation nationale | MENA | **WEB_DOCUMENTS** |
@@ -43,7 +43,7 @@ Toutes les sorties v0.6 sont rangées sous `data_lake/domains/<domain>/<source_i
 | Géographie administrative | geoBoundaries | **FULL_STRUCTURED** |
 | Géographie OSM | Geofabrik | **SNAPSHOT** PBF local + checksum |
 | Développement macro | World Bank WDI | **FULL_STRUCTURED** : réponses JSON + tables Parquet |
-| Projets World Bank | World Bank Projects | **WEB_DOCUMENTS** actuellement |
+| Projets World Bank | World Bank Projects | **FULL_STRUCTURED** : API `search.worldbank.org` (ISO2=CI) + Parquet |
 
 ## Pourquoi `CATALOG_ONLY` est distingué
 
@@ -57,7 +57,8 @@ La transition vers `FULL_STRUCTURED` se fait après validation d'un connecteur/A
 |--------|----------------|--------------------|----------------|
 | `civ_faostat` | CATALOG_ONLY | La page `source_url` est une SPA JS qui ne liste pas les fichiers bulk → le connecteur `bulk_catalog` ne découvre aucun lien, donc la table d'inventaire elle-même est vide. Marquée `success` à tort. | Connecteur spécialisé : `source_url` doit pointer vers `https://bulks-faostat.fao.org/` ou utiliser l'API pays (area=38). Roadmap point 2. |
 | `civ_uis` | CATALOG_ONLY | Idem : le bulk UIS réel et l'API SDMX (`api.on.unesco.org`) ne répondent pas. Inventaire vide. | Connecteur spécialisé à construire. Roadmap point 2. |
-| `civ_ilostat` | FULL_STRUCTURED | Le `.rds` CIV est téléchargé (snapshot conservé) mais `pyreadr`/`librdata` segfault au parsing. Isolé en subprocess → erreur gérable. | Re-parser via `rdata` (pure Python) ou un connecteur alternatif. |
+| `civ_ilostat` | FULL_STRUCTURED | **Résolu (v0.6)** : abandon du backend RDS (`pyreadr`/`librdata` segfaultait). Connecteur réécrit sur le backend CSV officiel `/data/indicator?ref_area=CIV` (filtrage serveur par pays, ~218 lignes CIV, snapshot CSV conservé). | — |
+| `civ_worldbank_projects` | FULL_STRUCTURED | **Résolu (v0.6)** : connecteur API dédié `search.worldbank.org/api/v2/projects?countrycode_exact=CI` (192 projets CIV avec montants, secteurs, statut). | — |
 
 Tant que ces sources restent vides, une synchro marquée `success` ne garantit pas qu'il y a des
 données exploitables. Toujours vérifier l'inventaire du manifest (`inventory.tables.files`) et le
