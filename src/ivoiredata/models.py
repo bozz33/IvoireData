@@ -22,14 +22,20 @@ class SourceSpec:
 
     @property
     def public(self) -> bool:
-        """Whether the source is safe for unattended public ingestion.
+        """Whether unattended ingestion is permitted by IvoireData policy.
 
-        OPEN and OPEN_PUBLIC are synchronizable. MIXED, controlled/research
-        access and any D_* rights tier stay manual by design.
+        OPEN/OPEN_PUBLIC payloads are ingestible. MIXED or controlled sources
+        remain blocked unless runtime configuration explicitly sets
+        ``metadata_only=true``; in that case only their public catalog/docs are
+        synchronized. D_* sources remain excluded from unattended ingestion.
         """
         access = self.access_tier.upper()
         rights = self.rights_tier.upper()
-        return access in {"OPEN", "OPEN_PUBLIC"} and not rights.startswith("D_")
+        if rights.startswith("D_"):
+            return False
+        if access in {"OPEN", "OPEN_PUBLIC"}:
+            return True
+        return bool(self.options.get("metadata_only", False))
 
 
 @dataclass
