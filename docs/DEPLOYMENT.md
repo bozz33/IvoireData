@@ -1,17 +1,17 @@
-# Déploiement local — v0.5.0
+# Déploiement local — v0.6.0
 
-IvoireData stocke toutes les données sur la machine qui exécute le moteur. Aucun S3/R2/MinIO ni serveur PostgreSQL n’est requis pour la V1.
+IvoireData stocke toutes les données sur la machine qui exécute le moteur. Aucun S3/R2/MinIO ni serveur PostgreSQL n'est requis.
 
 ## Installation Python
 
 ```bash
-python -m pip install -e '.[dev,training]'
+python -m pip install -e '.[dev]'
 ivoiredata coverage
 ivoiredata sources --public
-ivoiredata status --public
+ivoiredata inventory
 ```
 
-Première synchronisation recommandée :
+Première synchronisation de contrôle :
 
 ```bash
 ivoiredata sync civ_datagouv_catalog
@@ -20,14 +20,25 @@ ivoiredata sync civ_ilostat
 ivoiredata sync civ_geoboundaries
 ```
 
+Puis :
+
+```bash
+ivoiredata inventory
+```
+
 ## Dossiers
 
 ```text
-data_lake/             tables dlt
-  raw_external/        OSM et gros fichiers sélectionnés
-.ivoiredata/state/     fraîcheur/checkpoints
-corpora/               corpus versionnés
-tokenizer/             tokenizer local
+data_lake/
+├── catalog.json
+└── domains/
+    └── <domain>/<source_id>/
+        ├── raw/
+        ├── tables/
+        ├── documents/
+        └── manifest.json
+
+.ivoiredata/state/
 ```
 
 Changer les chemins :
@@ -36,6 +47,8 @@ Changer les chemins :
 IVOIREDATA_DATA_DIR=D:/IvoireData/data_lake
 IVOIREDATA_STATE_DIR=D:/IvoireData/state
 ```
+
+Utiliser de préférence des chemins absolus sur la machine d'exploitation.
 
 ## Mise à jour automatique
 
@@ -55,21 +68,21 @@ Le scheduler se réveille toutes les heures mais respecte le `refresh_hours` pro
 
 ## Windows
 
-Après installation :
-
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/install_windows_scheduler.ps1
 ```
 
-La tâche Windows doit démarrer dans le dossier du projet ou utiliser des variables d’environnement avec des chemins absolus.
+La tâche Windows doit démarrer dans le dossier du projet ou recevoir `IVOIREDATA_DATA_DIR`, `IVOIREDATA_STATE_DIR`, `IVOIREDATA_REGISTRY` et `IVOIREDATA_RUNTIME_CONFIG` en chemins absolus.
 
 ## Linux
 
-Le plus simple est un service systemd ou un processus supervisé exécutant :
+Utiliser systemd, supervisor ou un équivalent pour exécuter :
 
 ```bash
 ivoiredata scheduler --interval 3600
 ```
+
+Le service doit redémarrer automatiquement après reboot et conserver les mêmes chemins de données.
 
 ## API locale
 
@@ -77,7 +90,7 @@ ivoiredata scheduler --interval 3600
 uvicorn ivoiredata.api:app --host 127.0.0.1 --port 8000
 ```
 
-N’utiliser `0.0.0.0` que si l’API doit être accessible depuis le LAN et après avoir configuré le pare-feu.
+N'utiliser `0.0.0.0` que si l'API doit être accessible depuis le LAN et après configuration du pare-feu.
 
 ## Docker local
 
@@ -85,10 +98,19 @@ N’utiliser `0.0.0.0` que si l’API doit être accessible depuis le LAN et apr
 docker compose up --build
 ```
 
-Docker monte directement les dossiers locaux du projet. Il ne lance aucun stockage externe.
+Docker doit monter `data_lake/` et `.ivoiredata/` depuis le PC. Aucun stockage externe ne doit être démarré.
 
 ## Sauvegarde
 
-GitHub ne contient pas les données. Sauvegarder `data_lake/`, `.ivoiredata/`, `corpora/` et `tokenizer/` sur un autre disque.
+GitHub ne contient pas les données. Sauvegarder :
 
-Voir aussi [`OPERATIONS.md`](OPERATIONS.md) et [`STORAGE.md`](STORAGE.md).
+```text
+data_lake/
+.ivoiredata/
+```
+
+sur un second disque physique ou un autre support local contrôlé.
+
+Les données produites ensuite par l'équipe modèle (snapshots, corpus, tokenizer, shards, checkpoints) appartiennent à son propre espace de travail et ne sont pas nécessaires au fonctionnement d'IvoireData.
+
+Voir [`OPERATIONS.md`](OPERATIONS.md), [`STORAGE.md`](STORAGE.md) et [`DATA_HANDOFF_CONTRACT.md`](DATA_HANDOFF_CONTRACT.md).
