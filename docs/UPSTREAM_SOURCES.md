@@ -2,47 +2,55 @@
 
 Dernière vérification documentaire : **2026-08-09**.
 
-Ce fichier conserve les références utilisées pour concevoir les connecteurs **et** les références techniques utilisées par le guide downstream. Les URLs de données effectives restent dans `registry/sources.csv` et les connecteurs.
-
-| Système | Référence officielle | Usage |
+| Système | Référence officielle | Usage IvoireData |
 |---|---|---|
-| dlt OSS | https://dlthub.com/docs/ | moteur Extract/Normalize/Load et destination filesystem |
-| dlt filesystem | https://dlthub.com/docs/dlt-ecosystem/destinations/filesystem | data lake local, Parquet/JSONL, état et SQL DuckDB |
-| Data Fair | https://data-fair.github.io/ | modèle d’API derrière data.gouv.ci |
+| dlt OSS | https://dlthub.com/docs/ | Extract/Normalize/Load |
+| dlt filesystem | https://dlthub.com/docs/dlt-ecosystem/destinations/filesystem | data lake local / Parquet |
+| Data Fair | https://data-fair.github.io/ | API derrière data.gouv.ci |
 | data.gouv.ci | https://data.gouv.ci/ | open data national |
-| World Bank API | https://datahelpdesk.worldbank.org/knowledgebase/topics/125589-developer-information | WDI / données structurées |
-| FAOSTAT | https://www.fao.org/faostat/ | agriculture, API/bulk catalog |
-| ILOSTAT bulk | https://ilostat.ilo.org/data/bulk/ | statistiques du travail |
-| UNESCO UIS resources | https://databrowser.uis.unesco.org/resources | API et bulk download |
+| World Bank API | https://datahelpdesk.worldbank.org/knowledgebase/topics/125589-developer-information | WDI |
+| FAOSTAT | https://www.fao.org/faostat/ | agriculture, API et bulk download |
+| FAOSTAT bulk host | https://bulks-faostat.fao.org/ | ZIP bulk officiels utilisés par `faostat_country` |
+| ILOSTAT bulk/data | https://ilostat.ilo.org/data/bulk/ | statistiques du travail |
+| UNESCO UIS resources | https://databrowser.uis.unesco.org/resources | Data API + Bulk Data Download Service |
+| UNESCO UIS API documentation | https://api.uis.unesco.org/api/public/documentation/ | endpoints publics UIS |
 | UNESCO UIS bulk | https://databrowser.uis.unesco.org/resources/bulk | archives CSV officielles |
 | WHO GHO | https://www.who.int/data/gho/ | santé |
-| WHO API transition | https://www.who.int/data/gho/legacy | suivi de la transition des interfaces WHO |
 | geoBoundaries API | https://www.geoboundaries.org/api.html | limites administratives |
-| Geofabrik Côte d’Ivoire | https://download.geofabrik.de/africa/ivory-coast.html | snapshot OpenStreetMap PBF/GPKG/SHP |
-| ANStat NADA | https://nada.anstat.ci/index.php/catalog | métadonnées statistiques nationales |
-| Hugging Face Tokenizers | https://huggingface.co/docs/tokenizers/en/training_from_memory | exemple d’entraînement tokenizer depuis itérateur/fichiers |
-| Tokenizers components | https://huggingface.co/docs/tokenizers/v0.22.2/en/components | normalizers, pre-tokenizers, trainers |
-| NVIDIA NeMo pretraining data | https://docs.nvidia.com/nemo-framework/user-guide/25.09/data/pretrain_data.html | conversion texte/tokenisé pour pré-entraînement |
-| NVIDIA Megatron Core datasets | https://docs.nvidia.com/megatron-core/developer-guide/latest/api-guide/core/datasets.html | IndexedDataset, `.bin/.idx`, loaders et mélange de datasets |
+| Geofabrik Côte d’Ivoire | https://download.geofabrik.de/africa/ivory-coast.html | OSM PBF |
+| ANStat NADA | https://nada.anstat.ci/index.php/catalog | métadonnées nationales |
+| Hugging Face Tokenizers | https://huggingface.co/docs/tokenizers/en/training_from_memory | documentation downstream |
+| NVIDIA NeMo pretraining data | https://docs.nvidia.com/nemo-framework/user-guide/25.09/data/pretrain_data.html | documentation downstream |
+| NVIDIA Megatron Core datasets | https://docs.nvidia.com/megatron-core/developer-guide/latest/api-guide/core/datasets.html | documentation downstream |
+
+## FAOSTAT v0.7
+
+FAOSTAT annonce un accès libre à ses données agricoles et fournit à la fois un portail API et un service bulk. Le connecteur `faostat_country` utilise des ZIP bulk officiels sélectionnés, les conserve dans `raw/`, puis filtre les CSV normalisés sur la Côte d’Ivoire avant chargement Parquet.
+
+Les URL de ZIP sont dans le code du connecteur et doivent être retestées lors d’un changement upstream. Une réponse ZIP valide ne suffit pas : le sync doit aussi confirmer la présence de lignes Côte d’Ivoire.
+
+## UNESCO UIS v0.7
+
+Le portail UIS Resources annonce explicitement une **Data API** pour accès programmatique et un **Bulk Data Download Service**. IvoireData utilise l’API publique `api.uis.unesco.org/api/public` avec `geoUnit=CIV` pour les séries, plus les endpoints de définitions.
+
+Les données UIS sont publiques avec exigence d’attribution ; voir aussi les conditions d’utilisation UIS.
+
+## ILOSTAT
+
+Le connecteur v0.7 utilise le backend CSV pays. Le champ `obs_status` est un flag/statut d’observation et doit être conservé ; il ne sert pas de dimension de fréquence dans IvoireData.
 
 ## Règle de maintenance
 
-Lorsqu’une API ou une page de téléchargement change :
+Lorsqu’un upstream change :
 
-1. vérifier en priorité la documentation officielle du producteur ;
-2. modifier le connecteur et les tests ;
-3. mettre à jour ce fichier si l’URL de référence change ;
-4. ne jamais basculer silencieusement vers une source non officielle lorsque la source officielle est indisponible ;
-5. conserver l’ancienne donnée locale jusqu’à ce qu’une nouvelle synchronisation soit validée.
-
-## WHO
-
-La documentation WHO indique que l’ancienne interface Athena est retirée et que l’interface OData GHO historique devait être remplacée. Pour cette raison, IvoireData ne fige pas un endpoint WHO en transition sans validation : la source WHO reste suivie via le portail public tant qu’un connecteur API spécialisé actuel n’a pas été validé.
-
-## Bulk catalogs
-
-FAOSTAT et UIS peuvent exposer des fichiers très volumineux. IvoireData suit leurs catalogues automatiquement mais exige une sélection (`download_patterns`, `max_downloads`, `max_bytes`) avant de matérialiser de gros fichiers. Cette règle protège le disque local et rend la composition de la collecte explicite.
+1. vérifier la documentation officielle ;
+2. tester l’endpoint vivant ;
+3. modifier connecteur + tests ;
+4. lancer un sync réel ciblé ;
+5. vérifier `ivoiredata audit` ;
+6. conserver l’ancienne livraison locale tant que la nouvelle n’est pas validée ;
+7. ne jamais basculer silencieusement vers un miroir non officiel.
 
 ## Pipeline downstream
 
-Les références Hugging Face/NVIDIA ne rendent pas ces frameworks obligatoires. [`DOWNSTREAM_AUTOMATION.md`](DOWNSTREAM_AUTOMATION.md) définit une chaîne indépendante du framework : nettoyage, filtres, PII, qualité, déduplication, contamination, mixture, release corpus, tokenizer, tokenisation, packing, sharding puis adapter final vers le framework réellement utilisé par l’équipe modèle.
+Les références Hugging Face/NVIDIA servent uniquement de documentation à l’équipe modèle. Le moteur de collecte n’exécute pas officiellement corpus/tokenizer/training. Voir [`DOWNSTREAM_AUTOMATION.md`](DOWNSTREAM_AUTOMATION.md).

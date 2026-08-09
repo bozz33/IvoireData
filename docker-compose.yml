@@ -1,22 +1,6 @@
-# IvoireData — déploiement local de production.
-#
-# Toutes les données restent sur la machine hôte (rien en S3/Postgres).
-# Quatre volumes persistants survivent aux recreates :
-#   data_lake/   tables dlt + raw_external + manifests + catalog.json
-#   .ivoiredata/ fraîcheur / checkpoints
-#   corpora/     corpus versionnés (IvoireCorpus)
-#   tokenizer/   tokenizer entraîné localement
-#
-# Services:
-#   api        -> API FastAPI :8000 (démarrée par défaut)
-#   scheduler  -> ivoiredata scheduler --interval (synchro périodique, profil "run")
-#   sync-once  -> ivoiredata scheduler --once puis arrêt (première synchro, profil "sync")
-#
-# Usage:
-#   docker compose up -d --build                 # API seule
-#   docker compose --profile run up -d --build   # API + scheduler permanent
-#   docker compose --profile sync run sync-once  # une passe complète de synchro
-#   docker compose logs -f scheduler
+# IvoireData v0.7 — déploiement local de production.
+# Les données et l'état restent sur la machine hôte.
+# IvoireData ne monte plus corpus/tokenizer : ces artefacts appartiennent au pipeline downstream.
 
 x-engine-env: &engine-env
   IVOIREDATA_DATA_DIR: /app/data_lake
@@ -28,21 +12,16 @@ x-engine-env: &engine-env
 x-engine-volumes: &engine-volumes
   - ./data_lake:/app/data_lake
   - ./.ivoiredata:/app/.ivoiredata
-  - ./corpora:/app/corpora
-  - ./tokenizer:/app/tokenizer
 
 services:
-  # Prépare les volumes persistants (chown vers PUID/PGID) avant les autres services.
-  # Tourne une fois en root, puis s'arrête. Indispensable car Docker crée les bind-mounts
-  # en root et le container applicatif tourne en non-root.
   init-volumes:
     image: alpine:3.20
     command:
       - sh
       - -c
       - |
-        mkdir -p /data/data_lake /data/.ivoiredata/state /data/corpora /data/tokenizer
-        chown -R ${PUID:-1000}:${PGID:-1000} /data/data_lake /data/.ivoiredata /data/corpora /data/tokenizer
+        mkdir -p /data/data_lake /data/.ivoiredata/state
+        chown -R ${PUID:-1000}:${PGID:-1000} /data/data_lake /data/.ivoiredata
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
@@ -54,7 +33,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.5.0
+    image: ivoiredata:0.7.0
     restart: unless-stopped
     environment: *engine-env
     volumes: *engine-volumes
@@ -76,7 +55,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.5.0
+    image: ivoiredata:0.7.0
     restart: unless-stopped
     profiles: ["run"]
     command: ["ivoiredata", "scheduler", "--interval", "${IVOIREDATA_SCHEDULER_INTERVAL:-3600}"]
@@ -88,15 +67,13 @@ services:
       api:
         condition: service_healthy
 
-  # Passe unique : synchronise toutes les sources dues, puis s'arrête.
-  # Utilisée pour la première synchro complète et pour les passes de validation.
   sync-once:
     build:
       context: .
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.5.0
+    image: ivoiredata:0.7.0
     profiles: ["sync"]
     command: ["ivoiredata", "scheduler", "--once"]
     environment: *engine-env

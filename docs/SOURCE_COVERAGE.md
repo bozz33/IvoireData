@@ -1,98 +1,101 @@
-# Couverture multisectorielle — v0.6.0
+# Couverture multisectorielle — v0.7.0
 
-Cette matrice décrit **ce que le moteur livre réellement**, pas seulement les URLs connues.
+Cette matrice distingue **ce qui est implémenté dans le code** de **ce qui a été validé par un sync réel local**.
 
-## Niveaux de livraison
+## Niveaux de livraison v0.7
 
-- **FULL_STRUCTURED** : payload réel + représentation structurée locale.
-- **SNAPSHOT** : fichier réel local vérifiable + métadonnées/checksum.
-- **WEB_DOCUMENTS** : pages/documents publics réellement récupérés + table documentaire.
-- **CATALOG_ONLY** : catalogue/links réels, mais gros payloads non téléchargés sans sélection.
-- **METADATA_ONLY** : métadonnées publiques uniquement, payload contrôlé volontairement exclu.
-- **CONTROLLED** : référencé mais téléchargement automatique interdit par la politique.
+Le moteur ne déduit plus la couverture du seul `status=success`.
 
-Toutes les sorties v0.6 sont rangées sous `data_lake/domains/<domain>/<source_id>/`.
+- `FULL_STRUCTURED` : tables Parquet avec lignes métier ;
+- `DOCUMENTS_ONLY` : pages/PDF/documents réellement archivés ;
+- `SNAPSHOT_ONLY` : payload brut réel sans table métier ;
+- `METADATA_ONLY` : limitation volontaire aux métadonnées publiques ;
+- `EMPTY` : aucune livraison exploitable détectée.
 
-| Secteur | Source | Livraison v0.6 |
-|---|---|---|
-| Open data national | data.gouv.ci | **FULL_STRUCTURED** : CSV bruts + tables Parquet + catalogue |
-| Statistiques nationales | ANStat/NADA | **METADATA_ONLY** : catalogue public ; microdonnées contrôlées exclues |
-| Fiscalité/FNE | DGI | **WEB_DOCUMENTS** |
-| Droit | OHADA | **WEB_DOCUMENTS** |
-| Justice | Ministère Justice | **WEB_DOCUMENTS** |
-| Administration | Service Public | **WEB_DOCUMENTS** |
-| Dette | Trésor | **WEB_DOCUMENTS** |
-| Marchés publics | DGMP | **WEB_DOCUMENTS** |
-| Douanes/commerce | Douanes | **WEB_DOCUMENTS** |
-| Finance | BCEAO/APIF | **WEB_DOCUMENTS** actuellement |
-| Agriculture nationale | data.gouv.ci + Ministère Agriculture | **FULL_STRUCTURED + WEB_DOCUMENTS** |
-| Agriculture internationale | FAOSTAT | **CATALOG_ONLY** par défaut ; payloads via sélection `download_patterns` |
-| Travail/emploi | ILOSTAT | **FULL_STRUCTURED** : backend CSV `/data/indicator?ref_area=CIV` + Parquet |
-| Santé nationale | RASS/E-DEPPS | **WEB_DOCUMENTS** |
-| Santé internationale | WHO | **WEB_DOCUMENTS** tant que l'interface structurée actuelle n'est pas validée |
-| Éducation nationale | MENA | **WEB_DOCUMENTS** |
-| Éducation internationale | UNESCO UIS | **CATALOG_ONLY** par défaut |
-| Télécoms | ARTCI | **WEB_DOCUMENTS** |
-| Mines/pétrole/énergie | MMPE/MNV | **WEB_DOCUMENTS** |
-| Environnement | Ministère/SIE | **WEB_DOCUMENTS** |
-| Climat international | World Bank Climate | **WEB_DOCUMENTS** actuellement |
-| Transport | Ministère Transports | **WEB_DOCUMENTS** |
-| Foncier/logement | IDUFCI/Construction | **WEB_DOCUMENTS** |
-| Eau/assainissement | ONEP/ONAD | **WEB_DOCUMENTS** |
-| Météo | SODEXAM | **WEB_DOCUMENTS** |
-| Géographie administrative | geoBoundaries | **FULL_STRUCTURED** |
-| Géographie OSM | Geofabrik | **SNAPSHOT** PBF local + checksum |
-| Développement macro | World Bank WDI | **FULL_STRUCTURED** : réponses JSON + tables Parquet |
-| Projets World Bank | World Bank Projects | **FULL_STRUCTURED** : API `search.worldbank.org` (ISO2=CI) + Parquet |
+Voir [`AUDIT.md`](AUDIT.md).
 
-## Pourquoi `CATALOG_ONLY` est distingué
+## Couverture
 
-Un catalogue FAOSTAT/UIS est une vraie donnée utile pour découvrir les fichiers disponibles, mais ce n'est **pas** l'équivalent d'avoir les séries statistiques dans le data lake. IvoireData ne doit donc jamais présenter `CATALOG_ONLY` comme couverture complète.
+| Secteur | Source | Connecteur / livraison cible | État v0.7 |
+|---|---|---|---|
+| Open data national | data.gouv.ci | `data_gouv_ci` / FULL_STRUCTURED | validé en sync réel historique |
+| Statistiques nationales | ANStat/NADA | `public_web metadata_only` | métadonnées publiques ; TLS parfois dégradé |
+| Fiscalité/FNE | DGI | WEB_DOCUMENTS | opérationnel |
+| Droit | OHADA | WEB_DOCUMENTS | opérationnel |
+| Justice | Ministère Justice | WEB_DOCUMENTS | opérationnel |
+| Administration | Service Public | WEB_DOCUMENTS | opérationnel |
+| Dette | Trésor | WEB_DOCUMENTS | upstream peut renvoyer HTTP 500 ; stale conservé |
+| Marchés publics | DGMP | WEB_DOCUMENTS | opérationnel |
+| Douanes | Douanes | WEB_DOCUMENTS | opérationnel |
+| Finance | BCEAO/APIF | WEB_DOCUMENTS | opérationnel ; connecteur structuré futur possible |
+| Agriculture nationale | Data.gouv.ci + Ministère | FULL_STRUCTURED + DOCUMENTS | opérationnel |
+| Agriculture internationale | FAOSTAT | `faostat_country` / FULL_STRUCTURED | **implémenté v0.7 ; sync live local requis** |
+| Travail/emploi | ILOSTAT | `ilostat_ref_area` CSV / FULL_STRUCTURED | corrigé v0.7 ; conserver tous les `obs_status` |
+| Santé nationale | RASS/E-DEPPS | WEB_DOCUMENTS | opérationnel |
+| Santé internationale | WHO | WEB_DOCUMENTS | interface structurée à spécialiser ultérieurement |
+| Éducation nationale | MENA | WEB_DOCUMENTS | opérationnel |
+| Éducation internationale | UNESCO UIS | `uis_country` / FULL_STRUCTURED | **implémenté v0.7 ; sync live local requis** |
+| Télécoms | ARTCI | WEB_DOCUMENTS | opérationnel |
+| Mines/pétrole/énergie | MMPE/MNV | WEB_DOCUMENTS | opérationnel |
+| Environnement | Ministère/SIE | WEB_DOCUMENTS | opérationnel |
+| Climat international | World Bank Climate | WEB_DOCUMENTS | connecteur structuré futur possible |
+| Transport | Ministère Transports | WEB_DOCUMENTS | opérationnel |
+| Foncier/logement | IDUFCI/Construction | WEB_DOCUMENTS | opérationnel |
+| Eau/assainissement | ONEP/ONAD | WEB_DOCUMENTS | opérationnel |
+| Météo | SODEXAM | WEB_DOCUMENTS | opérationnel |
+| Géographie administrative | geoBoundaries | FULL_STRUCTURED | opérationnel |
+| Géographie OSM | Geofabrik | SNAPSHOT_ONLY PBF | opérationnel |
+| Développement macro | World Bank WDI | FULL_STRUCTURED | opérationnel |
+| Projets World Bank | World Bank Projects | FULL_STRUCTURED | opérationnel |
 
-La transition vers `FULL_STRUCTURED` se fait après validation d'un connecteur/API ou sélection de fichiers bulk pertinents.
+## FAOSTAT v0.7
 
-### État constaté au premier full sync (v0.5.0)
+L’ancien `bulk_catalog` avec `max_downloads=0` pouvait produire un `success` sans donnée. Il est remplacé par `faostat_country` qui :
 
-| Source | Niveau annoncé | État réel constaté | Action requise |
-|--------|----------------|--------------------|----------------|
-| `civ_faostat` | CATALOG_ONLY | La page `source_url` est une SPA JS qui ne liste pas les fichiers bulk → le connecteur `bulk_catalog` ne découvre aucun lien, donc la table d'inventaire elle-même est vide. Marquée `success` à tort. | Connecteur spécialisé : `source_url` doit pointer vers `https://bulks-faostat.fao.org/` ou utiliser l'API pays (area=38). Roadmap point 2. |
-| `civ_uis` | CATALOG_ONLY | Idem : le bulk UIS réel et l'API SDMX (`api.on.unesco.org`) ne répondent pas. Inventaire vide. | Connecteur spécialisé à construire. Roadmap point 2. |
-| `civ_ilostat` | FULL_STRUCTURED | **Résolu (v0.6)** : abandon du backend RDS (`pyreadr`/`librdata` segfaultait). Connecteur réécrit sur le backend CSV officiel `/data/indicator?ref_area=CIV` (filtrage serveur par pays, ~218 lignes CIV, snapshot CSV conservé). | — |
-| `civ_worldbank_projects` | FULL_STRUCTURED | **Résolu (v0.6)** : connecteur API dédié `search.worldbank.org/api/v2/projects?countrycode_exact=CI` (192 projets CIV avec montants, secteurs, statut). | — |
+- télécharge des ZIP bulk officiels sélectionnés ;
+- conserve les ZIP dans `raw/` avec SHA-256 ;
+- filtre les CSV normalisés sur la Côte d’Ivoire ;
+- produit des Parquet par famille statistique ;
+- échoue si aucune ligne pays n’est trouvée.
 
-Tant que ces sources restent vides, une synchro marquée `success` ne garantit pas qu'il y a des
-données exploitables. Toujours vérifier l'inventaire du manifest (`inventory.tables.files`) et le
-nombre de lignes Parquet avant de considérer une source comme réellement couverte.
+Le premier sync réel v0.7 doit confirmer les noms/format courants des archives et le volume livré.
 
-## Vérification runtime
+## UIS v0.7
+
+L’ancien catalogue vide est remplacé par `uis_country` :
+
+- API publique UIS ;
+- `geoUnit=CIV` ;
+- définitions + séries + raw JSON ;
+- Parquet local.
+
+Le premier sync réel v0.7 doit confirmer le payload courant de l’API et le nombre de lignes Côte d’Ivoire.
+
+## ILOSTAT v0.7
+
+Le backend RDS/pyreadr a été abandonné. Le CSV pays est utilisé.
+
+Correction critique : `obs_status` est conservé comme statut d’observation. Les valeurs révisées (`R`) ne sont plus supprimées par un faux filtre de fréquence.
+
+## Validation après mise à jour
 
 ```bash
-ivoiredata coverage
-ivoiredata inventory
-ivoiredata status --public
+ivoiredata sync civ_ilostat --force
+ivoiredata sync civ_faostat --force
+ivoiredata sync civ_uis --force
+ivoiredata sync civ_worldbank_projects --force
+ivoiredata audit
 ```
 
-`coverage` décrit le registre/configuration ; `inventory` décrit les packages présents dans le data lake.
+Puis :
+
+```bash
+ivoiredata sync --all-public --force
+ivoiredata audit
+```
+
+La sortie de `audit` devient la référence pour annoncer le nombre de sources réellement utilisables.
 
 ## Sources contrôlées
 
-Restent hors téléchargement automatique :
-
-- microdonnées ANStat soumises à conditions ;
-- datasets `D_*` ;
-- payloads nécessitant authentification/acceptation spécifique ;
-- fichiers dont le mode d'accès n'autorise pas l'ingestion automatique selon la politique du projet.
-
-## Cible
-
-La cible opérationnelle est de faire progresser les sources prioritaires de :
-
-```text
-WEB_DOCUMENTS / CATALOG_ONLY
-            ↓
-connecteur spécialisé validé
-            ↓
-FULL_STRUCTURED
-```
-
-lorsque l'upstream fournit une interface officielle adaptée.
+Restent hors téléchargement automatique : microdonnées ANStat soumises à conditions, sources `D_*`, payloads exigeant authentification/acceptation ou toute source dont les droits n’autorisent pas l’ingestion automatisée.

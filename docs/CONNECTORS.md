@@ -1,6 +1,6 @@
-# Connecteurs IvoireData v0.6
+# Connecteurs IvoireData v0.7
 
-Les connecteurs transforment une source externe en ressource dlt. Le moteur place ensuite leurs sorties dans :
+Chaque connecteur transforme un upstream public en ressource dlt isolée sous :
 
 ```text
 data_lake/domains/<domain>/<source_id>/
@@ -10,134 +10,115 @@ data_lake/domains/<domain>/<source_id>/
 └── manifest.json
 ```
 
-Les tables normalisées sont chargées en Parquet.
-
 ## `data_gouv_ci`
 
-Source : `data.gouv.ci` / Data Fair.
-
-- découvre le catalogue public ;
-- table `datagouv_catalog` ;
-- table par dataset ;
-- archive chaque CSV `/full` réellement récupéré dans `raw/` ;
-- conserve URL, dataset ID, index de ligne, SHA-256 et chemin brut ;
-- mémorise les signatures de métadonnées pour éviter les rechargements inutiles.
+- découvre le catalogue Data.gouv.ci ;
+- matche dataset ciblé par `id` **ou** `slug` ;
+- ignore individuellement les datasets `/full` indisponibles/mal formés ;
+- snapshot CSV raw + tables Parquet ;
+- provenance URL, dataset ID, SHA-256, chemin brut.
 
 ## `world_bank_wdi`
 
-Source : World Bank API v2.
+- API World Bank v2 ;
+- pays `CIV` ;
+- catalogue des indicateurs ;
+- lots jusqu’à 60 indicateurs ;
+- un batch HTTP 400 est subdivisé récursivement pour isoler un indicateur fautif ;
+- raw JSON + Parquet.
 
-- cible `CIV` ;
-- charge les indicateurs ;
-- interroge par lots ;
-- archive les réponses JSON reçues dans `raw/` ;
-- produit `worldbank_wdi_indicators` et `worldbank_wdi`.
+## `world_bank_projects`
+
+- API `search.worldbank.org/api/v2/projects` ;
+- code pays ISO2 `CI` ;
+- pagination par `rows`/`os` ;
+- projets, secteurs/thèmes et métadonnées normalisés par dlt ;
+- chaque page JSON est conservée dans `raw/`.
 
 ## `ilostat_ref_area`
 
-Source : ILOSTAT bulk backend.
+- backend CSV `rplumber.ilo.org/data/indicator?ref_area=CIV` ;
+- abandon du RDS/`pyreadr` ;
+- toutes les observations reçues sont conservées ;
+- **`obs_status` est un statut d’observation et n’est jamais utilisé comme filtre de fréquence** ;
+- raw CSV + Parquet.
 
-- cible `CIV` ;
-- fréquence annuelle `A` par défaut ;
-- archive le RDS source dans `raw/` ;
-- lit avec `pyreadr` ;
-- normalise en table Parquet ;
-- conserve URL, SHA-256 et chemin du RDS.
+## `faostat_country`
+
+Connecteur v0.7 spécialisé pour FAOSTAT.
+
+- télécharge un ensemble contrôlé de ZIP bulk officiels ;
+- streaming vers fichier temporaire avec limite `max_bytes_per_file` ;
+- SHA-256 + snapshot ZIP dans `raw/` ;
+- lit les CSV normalisés à l’intérieur des archives ;
+- filtre uniquement les lignes Côte d’Ivoire via les libellés pays configurés ;
+- produit des tables distinctes pour production cultures/élevage, sécurité alimentaire, prix, utilisation des terres et commerce agricole ;
+- échoue explicitement si les téléchargements réussissent mais qu’aucune ligne Côte d’Ivoire n’est trouvée.
+
+Les bulk mondiaux peuvent être volumineux. La limite par fichier est configurable dans `runtime_sources.json`.
+
+## `uis_country`
+
+Connecteur v0.7 spécialisé UNESCO UIS.
+
+- API publique UIS ;
+- filtre `geoUnit=CIV` ;
+- snapshots JSON ;
+- définitions des indicateurs ;
+- définition géographique Côte d’Ivoire ;
+- séries d’indicateurs structurées dans `uis_data` ;
+- `start_year`/`end_year` configurables.
 
 ## `geoboundaries`
 
-Source : API geoBoundaries.
-
-- charge les métadonnées CIV ;
-- récupère le GeoJSON officiel ;
-- produit géométries/propriétés structurées ;
-- conserve le SHA-256 du GeoJSON dans les données normalisées.
+- API geoBoundaries ;
+- lorsque `.../CIV/` est un directory listing HTML, exploration ADM0–ADM5 ;
+- GeoJSON + tables de géométries/propriétés.
 
 ## `osm_geofabrik`
 
-Source : OpenStreetMap via Geofabrik.
-
-- PBF par défaut ;
-- GPKG et SHP ZIP également supportés ;
-- binaire stocké dans `raw/` du package source ;
-- vérifie le MD5 distant lorsque disponible ;
-- téléchargement temporaire `.part` puis remplacement atomique ;
-- taille, MD5, SHA-256 et URL sont exposés dans la table de snapshot.
-
-## `bulk_catalog`
-
-Pour les services de gros téléchargements, notamment FAOSTAT et UNESCO UIS.
-
-Mode par défaut : **catalogue seulement**.
-
-- découvre les liens CSV/JSON/XML/XLSX/Parquet/ZIP/GZ ;
-- chaque source a sa propre table `bulk_catalog_<source_id>` ;
-- `download_patterns` sélectionne les payloads à matérialiser ;
-- `max_downloads` et `max_bytes` protègent le disque ;
-- les fichiers sélectionnés vont dans `raw/`.
-
-Exemple :
-
-```json
-{
-  "connector": "bulk_catalog",
-  "options": {
-    "download_patterns": ["pattern-officiel-a-valider"],
-    "max_downloads": 2,
-    "max_bytes": 250000000
-  }
-}
-```
-
-Une source `bulk_catalog` avec `max_downloads=0` livre **le catalogue**, pas encore le payload statistique complet. La couverture doit le signaler clairement.
+- snapshot PBF Côte d’Ivoire par défaut ;
+- téléchargement temporaire puis remplacement ;
+- checksum distant lorsqu’il existe + SHA-256 local ;
+- livraison classée `SNAPSHOT_ONLY` lorsque le PBF est le payload final attendu.
 
 ## `public_web`
 
-Pour les sites institutionnels sans API adaptée.
-
-- HTTP public uniquement ;
-- respect `robots.txt` ;
+- sites/PDF institutionnels sans API adaptée ;
 - même domaine ;
 - crawl borné ;
-- limites pages/taille ;
-- extraction HTML/PDF/text ;
-- SHA-256 ;
-- snapshots des pages/documents changés dans `documents/` ;
-- table `public_documents` pour recherche/inspection ;
-- `metadata_only=true` bloque les routes/formats de microdonnées avant requête.
-
-Utilisé notamment pour DGI, CNPS, Justice, ministères, ARTCI, Douanes, etc., en attendant des connecteurs plus structurés lorsque l'upstream le permet.
+- robots.txt ;
+- liens individuels 404/SSL ignorés sans tuer toute la source ;
+- page racine reste critique ;
+- HTML/PDF/text ;
+- `metadata_only=true` bloque routes/formats de microdonnées avant requête ;
+- `verify_ssl=false` est permis uniquement comme fallback explicite et apparaît comme `DEGRADED_TLS` dans l’audit.
 
 ## `http_file`
 
-Pour une URL directe CSV/JSON/JSONL/XLS/XLSX/Parquet.
+CSV, JSON, JSONL, XLS, XLSX ou Parquet direct : snapshot raw + table structurée.
 
-- archive le fichier reçu dans `raw/` ;
-- produit une table normalisée ;
-- conserve source URL, format, SHA-256, chemin brut et index de ligne ;
-- Excel : conserve le nom de feuille.
+## `bulk_catalog`
 
-## Isolation
-
-Chaque source utilise un pipeline dlt séparé. Un changement de schéma ou une erreur d'une source ne doit pas mélanger ses tables/états avec ceux d'une autre source.
+Connecteur générique conservé pour d’autres catalogues bulk. FAOSTAT et UIS **ne l’utilisent plus en v0.7** : ils ont leurs connecteurs spécialisés.
 
 ## Règle de choix
 
-1. API/dataset structuré connu → connecteur spécialisé ;
+1. API ou format officiel stable → connecteur spécialisé ;
 2. fichier direct → `http_file` ;
-3. catalogue bulk → `bulk_catalog` ;
-4. site/document public → `public_web` ;
-5. source contrôlée → pas de payload automatique, métadonnées seulement si autorisé.
+3. gros catalogue réellement indexable → `bulk_catalog` ;
+4. pages/documents publics → `public_web` ;
+5. source contrôlée → aucune microdonnée automatique ; métadonnées publiques uniquement si la politique le permet.
 
-## Ajouter un connecteur
+## Validation d’un connecteur
 
-Voir [`ADDING_SOURCE.md`](ADDING_SOURCE.md). Un nouveau connecteur doit :
+Un connecteur n’est considéré complet qu’après :
 
-- conserver la provenance ;
-- respecter droits/accès ;
-- définir timeouts/retry ;
-- être idempotent ou détecter les changements ;
-- sauvegarder le brut lorsqu'approprié ;
-- produire une sortie structurée lorsque possible ;
-- ne jamais écrire les données réelles dans Git ;
-- avoir des tests unitaires hors réseau.
+1. tests unitaires hors réseau ;
+2. CI verte ;
+3. sync réel contre l’upstream ;
+4. `ivoiredata audit` confirmant une livraison non vide et cohérente ;
+5. inspection d’un échantillon de tables/raw ;
+6. documentation des droits, fréquence et formats.
+
+Voir [`ADDING_SOURCE.md`](ADDING_SOURCE.md) et [`AUDIT.md`](AUDIT.md).

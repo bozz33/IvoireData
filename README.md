@@ -1,22 +1,18 @@
 # IvoireData 🇨🇮
 
-**v0.6.0 — moteur local de collecte, mise à jour et livraison de données classées par domaine, construit sur dlt OSS**
+**v0.7.0 — moteur local de collecte, mise à jour, audit et livraison de données classées par domaine, construit sur dlt OSS**
 
-IvoireData est l’infrastructure de données destinée à alimenter les projets IA : il découvre les sources, récupère les vraies données publiques, conserve leur provenance, détecte les mises à jour et les range localement **par domaine puis par source**.
-
-**Toutes les données réelles restent sur le PC.** Aucun S3, R2 ou MinIO n’est nécessaire. PostgreSQL n’est pas requis : les gros volumes restent en fichiers locaux et les tables normalisées sont produites en Parquet.
+IvoireData collecte les sources publiques utiles à la Côte d’Ivoire, conserve leur provenance, détecte les mises à jour et livre les données localement **par domaine puis par source**. Les données réelles restent sur la machine : GitHub ne contient que le code, la configuration et la documentation.
 
 ## Frontière de responsabilité
 
-IvoireData s’arrête à la livraison du data lake :
-
 ```text
-Internet / APIs / sites officiels / PDF / CSV / XLSX / PBF
+Internet / APIs / sites officiels / PDF / CSV / ZIP / PBF
                            │
                            ▼
                        IvoireData
                            │
-          collecte / update / provenance / classement
+       collecte / update / provenance / audit / classement
                            │
                            ▼
                   data_lake/domains/
@@ -24,108 +20,117 @@ Internet / APIs / sites officiels / PDF / CSV / XLSX / PBF
                            ▼
                 pipeline équipe modèle
                            │
-      nettoyage avancé / filtres / PII / dédup
+      nettoyage / filtres / PII / dédup / corpus
                            │
-                           ▼
-               corpus / tokenizer / shards
+                 tokenizer / shards
                            │
                            ▼
                       entraînement
 ```
 
-La partie corpus/tokenizer n’est plus l’interface opérationnelle principale d’IvoireData. Elle est documentée pour l’équipe modèle dans [`docs/DOWNSTREAM_AUTOMATION.md`](docs/DOWNSTREAM_AUTOMATION.md).
+IvoireData s’arrête au data lake. La chaîne downstream est documentée dans [`docs/DOWNSTREAM_AUTOMATION.md`](docs/DOWNSTREAM_AUTOMATION.md) et son contrat d’entrée dans [`docs/DATA_HANDOFF_CONTRACT.md`](docs/DATA_HANDOFF_CONTRACT.md).
 
-## Architecture locale v0.6
+## Stockage local
 
 ```text
 data_lake/
 ├── catalog.json
 └── domains/
-    ├── agriculture/
-    │   ├── civ_faostat/
-    │   │   ├── raw/
-    │   │   ├── tables/
-    │   │   ├── documents/
-    │   │   └── manifest.json
-    │   └── ...
-    ├── health/
-    ├── education/
-    ├── economy/
-    ├── geography/
-    └── ...
+    └── <domain>/
+        └── <source_id>/
+            ├── raw/
+            ├── tables/
+            ├── documents/
+            └── manifest.json
 
 .ivoiredata/state/
-└── fraîcheur/checkpoints
+└── freshness.json
 ```
 
-Chaque source a son propre pipeline dlt, son propre état, son dossier de données et son `manifest.json`. `data_lake/catalog.json` fournit l’index global consommable par un autre projet.
+Les tables normalisées sont en Parquet. PostgreSQL, S3, R2 et MinIO ne sont pas requis pour la v0.7.
 
-## Connecteurs
+## Un `success` ne signifie plus « données disponibles »
 
-- Data.gouv.ci / Data Fair : catalogue et datasets structurés + snapshots CSV locaux ;
-- World Bank WDI : API structurée + réponses JSON archivées ;
-- ILOSTAT : statistiques CIV + RDS source archivé ;
-- geoBoundaries : limites administratives ;
-- OpenStreetMap/Geofabrik : snapshot PBF local avec checksum ;
-- FAOSTAT et UNESCO UIS : catalogues bulk et téléchargement sélectif ;
-- ANStat/NADA : métadonnées publiques uniquement lorsque l’accès aux microdonnées est contrôlé ;
-- DGI, OHADA, CNPS, Justice, Santé, Éducation, Agriculture, ARTCI, Douanes, DGMP, SODEXAM, etc. : crawler public borné, même domaine et respect `robots.txt` ;
-- CSV, JSON, JSONL, XLS/XLSX, Parquet, HTML, PDF.
+Le manifest v2 sépare quatre dimensions :
 
-Les payloads récupérés sont conservés dans `raw/` ou `documents/` lorsque cela est approprié ; les représentations structurées sont stockées dans `tables/` au format Parquet.
+- `sync.status` : `SUCCESS` / `ERROR` ;
+- `delivery.status` : `FULL_STRUCTURED`, `DOCUMENTS_ONLY`, `SNAPSHOT_ONLY`, `METADATA_ONLY`, `EMPTY` ;
+- `freshness.status` : `FRESH`, `DUE`, `STALE`, `NEVER_SYNCED` ;
+- `transport.security` : `VERIFIED_TLS`, `DEGRADED_TLS`, `HTTP`.
 
-## Installation
+Exemples de warnings : `EMPTY_AFTER_SUCCESS`, `SYNC_ERROR_WITH_STALE_DATA`, `TLS_VERIFICATION_DISABLED`, `METADATA_ONLY_SOURCE`.
+
+Les lignes Parquet sont comptées via leurs **métadonnées**, sans relire les datasets complets.
+
+## Audit
 
 ```bash
+ivoiredata audit
+```
+
+renvoie pour chaque source : statut de sync, niveau réel de livraison, fraîcheur, sécurité transport, nombre de lignes, fichiers raw/tables/documents et warnings.
+
+API équivalente :
+
+```text
+GET /audit
+```
+
+Voir [`docs/AUDIT.md`](docs/AUDIT.md).
+
+## Connecteurs structurés principaux
+
+- `data_gouv_ci` : catalogue Data.gouv.ci + datasets `/full`, raw + Parquet ;
+- `world_bank_wdi` : World Bank WDI, JSON + Parquet ;
+- `world_bank_projects` : projets World Bank Côte d’Ivoire via API de recherche ;
+- `ilostat_ref_area` : backend CSV ILOSTAT filtré `ref_area=CIV`, sans RDS/pyreadr ;
+- `faostat_country` : ZIP bulk FAOSTAT officiels, snapshots raw, filtrage Côte d’Ivoire, Parquet par domaine FAOSTAT ;
+- `uis_country` : UIS Data API, définitions + séries `geoUnit=CIV`, raw JSON + Parquet ;
+- `geoboundaries` : limites administratives ;
+- `osm_geofabrik` : snapshot PBF Côte d’Ivoire ;
+- `public_web` : sites/PDF institutionnels bornés, même domaine, robots.txt ;
+- `http_file` : CSV/JSON/JSONL/XLS/XLSX/Parquet directs.
+
+**FAOSTAT et UIS v0.7 doivent être resynchronisés sur la machine locale après mise à jour afin de confirmer leur volume réel.** Le code/CI valide les connecteurs hors réseau ; seul le sync local valide l’upstream vivant et matérialise les données.
+
+## Installation / mise à jour
+
+```bash
+git pull
 python -m pip install -e '.[dev]'
+
 ivoiredata coverage
 ivoiredata sources --public
-ivoiredata inventory
+ivoiredata audit
 ```
 
-Synchroniser une source :
+Docker :
 
 ```bash
-ivoiredata sync civ_worldbank_wdi
+docker compose build
+docker compose --profile run up -d
 ```
 
-Synchroniser les sources arrivées à échéance :
+## Validation ciblée v0.7
+
+Après mise à jour, exécuter :
 
 ```bash
-ivoiredata scheduler --once
+ivoiredata sync civ_ilostat --force
+ivoiredata sync civ_faostat --force
+ivoiredata sync civ_uis --force
+ivoiredata sync civ_worldbank_projects --force
+ivoiredata audit
 ```
 
-Scheduler local permanent :
+Puis, pour toutes les sources publiques :
 
 ```bash
-ivoiredata scheduler --interval 3600
+ivoiredata sync --all-public --force
+ivoiredata audit
 ```
 
-Trouver le dossier d’une source :
-
-```bash
-ivoiredata source-path civ_worldbank_wdi
-```
-
-## Manifest et catalogue
-
-Après synchronisation :
-
-```text
-data_lake/domains/<domain>/<source_id>/manifest.json
-```
-
-contient notamment : source, domaine, provider, URL, droits, connecteur, statut, dates et inventaire local.
-
-Le fichier :
-
-```text
-data_lake/catalog.json
-```
-
-regroupe toutes les sources et sert de **contrat de handoff** au projet d’entraînement.
-
-Voir [`docs/DATA_HANDOFF_CONTRACT.md`](docs/DATA_HANDOFF_CONTRACT.md).
+Une source ne doit être déclarée réellement couverte que si `delivery_status != EMPTY` et que son contenu correspond au niveau attendu.
 
 ## API locale
 
@@ -133,36 +138,32 @@ Voir [`docs/DATA_HANDOFF_CONTRACT.md`](docs/DATA_HANDOFF_CONTRACT.md).
 uvicorn ivoiredata.api:app --host 127.0.0.1 --port 8000
 ```
 
-L’API expose l’état, les sources, la couverture et les synchronisations. Elle reste optionnelle : le data lake local est l’artefact principal.
+Endpoints principaux : `/health`, `/sources`, `/status`, `/coverage`, `/audit`, `/inventory`, `/sync/{source_id}`, `/query/source/{source_id}`.
 
 ## Documentation
 
 | Document | Rôle |
 |---|---|
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | architecture complète et flux de données |
-| [`docs/ENGINE.md`](docs/ENGINE.md) | fonctionnement interne du moteur |
-| [`docs/CONNECTORS.md`](docs/CONNECTORS.md) | types de connecteurs et comportement |
-| [`docs/SOURCES.md`](docs/SOURCES.md) | familles de sources, stratégie et fréquence |
-| [`docs/UPSTREAM_SOURCES.md`](docs/UPSTREAM_SOURCES.md) | références officielles upstream |
-| [`docs/SOURCE_COVERAGE.md`](docs/SOURCE_COVERAGE.md) | couverture réellement implémentée |
-| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | exploitation quotidienne, sync, incidents |
-| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | installation locale Windows/Linux/Docker |
-| [`docs/STORAGE.md`](docs/STORAGE.md) | organisation des fichiers locaux |
-| [`docs/DATA_HANDOFF_CONTRACT.md`](docs/DATA_HANDOFF_CONTRACT.md) | contrat IvoireData → équipe modèle |
-| [`docs/DOWNSTREAM_AUTOMATION.md`](docs/DOWNSTREAM_AUTOMATION.md) | automatisation nettoyage → filtres → corpus → tokenizer → shards |
-| [`docs/CORPUS.md`](docs/CORPUS.md) | frontière de responsabilité corpus |
-| [`docs/QUALITY_ASSURANCE.md`](docs/QUALITY_ASSURANCE.md) | qualité des données du moteur |
-| [`docs/RIGHTS_AND_ACCESS.md`](docs/RIGHTS_AND_ACCESS.md) | droits et accès public/contrôlé |
-| [`docs/ADDING_SOURCE.md`](docs/ADDING_SOURCE.md) | ajouter une nouvelle source/connecteur |
-| [`docs/DATAGOUV_ACCESS.md`](docs/DATAGOUV_ACCESS.md) | détail Data.gouv.ci |
-
-Le registre machine-readable reste [`registry/sources.csv`](registry/sources.csv) et les fréquences d’exécution sont dans [`configs/runtime_sources.json`](configs/runtime_sources.json).
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | architecture et flux |
+| [`docs/ENGINE.md`](docs/ENGINE.md) | moteur interne |
+| [`docs/CONNECTORS.md`](docs/CONNECTORS.md) | connecteurs |
+| [`docs/SOURCES.md`](docs/SOURCES.md) | familles de sources |
+| [`docs/UPSTREAM_SOURCES.md`](docs/UPSTREAM_SOURCES.md) | références upstream |
+| [`docs/SOURCE_COVERAGE.md`](docs/SOURCE_COVERAGE.md) | couverture et validation live |
+| [`docs/AUDIT.md`](docs/AUDIT.md) | contrat d’audit v0.7 |
+| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | exploitation quotidienne |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | installation/Docker |
+| [`docs/STORAGE.md`](docs/STORAGE.md) | stockage local |
+| [`docs/DATA_HANDOFF_CONTRACT.md`](docs/DATA_HANDOFF_CONTRACT.md) | handoff équipe modèle |
+| [`docs/DOWNSTREAM_AUTOMATION.md`](docs/DOWNSTREAM_AUTOMATION.md) | nettoyage → corpus → tokenizer → training |
+| [`docs/RIGHTS_AND_ACCESS.md`](docs/RIGHTS_AND_ACCESS.md) | droits et accès |
+| [`docs/ADDING_SOURCE.md`](docs/ADDING_SOURCE.md) | ajout d’une source |
 
 ## Principes
 
-1. GitHub contient le code/config/docs, jamais le data lake réel.
-2. Pas de contournement d’authentification, CAPTCHA, paywall ou contrôle par rôle.
-3. Une source `MIXED` peut être `metadata_only`, sans téléchargement de microdonnées contrôlées.
-4. Les données gardent leur provenance et, lorsque possible, un SHA-256.
-5. Une source défaillante ne doit pas casser le stockage des autres : pipelines et dossiers séparés.
-6. IvoireData reste vivant et actualisé ; le pipeline de l’équipe modèle choisit ensuite quand figer un snapshot pour construire un corpus.
+1. GitHub ne contient jamais le data lake réel.
+2. Pas de contournement d’authentification, CAPTCHA, paywall ou contrôle d’accès.
+3. Les microdonnées contrôlées restent exclues de l’ingestion automatique.
+4. Provenance, URL et SHA-256 sont conservés lorsque possible.
+5. Une erreur upstream ne doit pas supprimer la dernière livraison valide.
+6. `success` technique et livraison exploitable sont toujours mesurés séparément.

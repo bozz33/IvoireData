@@ -1,6 +1,6 @@
-# IvoireData Engine v0.6.0
+# IvoireData Engine v0.7.0
 
-IvoireData utilise **dlt OSS** comme moteur Extract/Normalize/Load. IvoireData ajoute : registre des sources, routage, politiques de fraîcheur, provenance, snapshots locaux, classement par domaine/source, manifests et catalogue global.
+IvoireData utilise **dlt OSS** pour Extract/Normalize/Load et ajoute registre des sources, routage, politiques d’accès, fraîcheur, provenance, snapshots locaux, classement domaine/source, manifests auditables et catalogue global.
 
 ## Responsabilité officielle
 
@@ -9,126 +9,124 @@ source officielle
 → acquisition
 → conservation brute lorsque appropriée
 → normalisation dlt
-→ Parquet
+→ Parquet/documents/snapshot
 → classement domaine/source
-→ manifest
+→ audit livraison
+→ manifest v2
 → catalog global
 → mise à jour automatique
 ```
 
-Le nettoyage ML avancé, les filtres PII du corpus, la déduplication fuzzy, la mixture, le tokenizer, le packing et les shards d'entraînement sont documentés mais exécutés par le pipeline de l'équipe modèle.
+Le nettoyage ML avancé, PII corpus, dédup fuzzy, mixture, tokenizer, packing et shards sont hors du moteur ; voir [`DOWNSTREAM_AUTOMATION.md`](DOWNSTREAM_AUTOMATION.md).
 
-## Composants
-
-### `Settings`
-
-Définit `data_lake/`, l'état local, le registre et la configuration runtime.
-
-### `SourceRegistry`
-
-Fusionne :
-
-1. `registry/sources.csv` ;
-2. `configs/runtime_sources.json` ;
-3. les options runtime de chaque source.
-
-### `IvoireDataEngine`
+## `IvoireDataEngine`
 
 Responsabilités :
 
-- résoudre la source ;
-- appliquer la politique d'accès ;
-- créer son arborescence ;
-- choisir le connecteur ;
-- lancer un **pipeline dlt isolé par source** ;
-- charger les tables en Parquet ;
-- enregistrer succès/erreur ;
-- mettre à jour `manifest.json` ;
-- reconstruire `data_lake/catalog.json`.
+- résoudre la source et appliquer la politique d’accès ;
+- créer son arborescence locale ;
+- router vers un connecteur ;
+- lancer un pipeline dlt isolé par source ;
+- charger en Parquet lorsque structurable ;
+- conserver raw/documents ;
+- enregistrer fraîcheur succès/erreur ;
+- calculer la livraison réelle ;
+- écrire `manifest.json` ;
+- reconstruire `catalog.json` ;
+- produire `audit()`.
 
-### `delivery.py`
+## `delivery.py` — manifest v2
 
-Définit le contrat physique :
+Le manifest sépare :
 
 ```text
-data_lake/domains/<domain>/<source_id>/
-├── raw/
-├── tables/
-├── documents/
-└── manifest.json
+sync.status
+
+delivery.status
+  FULL_STRUCTURED
+  DOCUMENTS_ONLY
+  SNAPSHOT_ONLY
+  METADATA_ONLY
+  EMPTY
+
+freshness.status
+  FRESH
+  DUE
+  STALE
+  NEVER_SYNCED
+
+transport.security
+  VERIFIED_TLS
+  DEGRADED_TLS
+  HTTP
 ```
 
-### `snapshots.py`
+Le moteur garde le champ top-level `status` pour compatibilité avec les anciens consommateurs.
 
-Archive certains payloads bruts sous nom content-addressed et écrit un sidecar `.meta.json` contenant provenance, MIME, taille, date et SHA-256.
-
-### `FreshnessStore`
-
-`.ivoiredata/state/freshness.json` contient les derniers essais/succès. `refresh_hours` décide quand une source doit être revue.
-
-### dlt
-
-Chaque source dispose de sa propre destination filesystem locale et de son propre état dlt. Le format normalisé de v0.6 est **Parquet**.
+Les lignes Parquet sont calculées à partir des métadonnées `num_rows`, sans scanner les tables complètes.
 
 ## Connecteurs spécialisés
 
-- `data_gouv_ci` : catalogue Data Fair + datasets CSV bruts + tables ;
-- `world_bank_wdi` : API WDI + réponses JSON archivées ;
-- `ilostat_ref_area` : RDS CIV archivé + tables ;
+- `data_gouv_ci` ;
+- `world_bank_wdi` ;
+- `world_bank_projects` ;
+- `ilostat_ref_area` — CSV pays, aucun filtre sur `obs_status` ;
+- `faostat_country` — ZIP bulk + filtre Côte d’Ivoire ;
+- `uis_country` — UIS Data API + `geoUnit=CIV` ;
 - `geoboundaries` ;
-- `osm_geofabrik` : PBF/GPKG/SHP local avec checksum.
+- `osm_geofabrik`.
 
-## Connecteurs génériques
-
-- `http_file` : CSV/JSON/JSONL/XLS/XLSX/Parquet + snapshot ;
-- `bulk_catalog` : découverte + téléchargements explicitement sélectionnés ;
-- `public_web` : HTML/PDF/text, crawler borné et `robots.txt`, snapshots documentaires.
+Connecteurs génériques : `http_file`, `bulk_catalog`, `public_web`.
 
 Voir [`CONNECTORS.md`](CONNECTORS.md).
 
-## Mise à jour
+## Freshness
 
-Deux niveaux :
+`.ivoiredata/state/freshness.json` garde `last_attempt`, `last_status`, `last_success` et les détails. `refresh_hours` décide si une source est due.
 
-1. le scheduler n'appelle une source que lorsque `refresh_hours` l'exige ;
-2. le connecteur compare hash/signature/checksum/état pour éviter le retraitement inutile.
+Lorsqu’un nouvel essai échoue mais qu’une ancienne donnée valide existe, le manifest v2 expose `STALE` sans supprimer la livraison précédente.
+
+## Audit
+
+```bash
+ivoiredata audit
+```
+
+et :
+
+```text
+GET /audit
+```
+
+lisent les manifests et l’état de fraîcheur pour fournir la couverture réellement exploitable. Voir [`AUDIT.md`](AUDIT.md).
 
 ## Permissions
 
-`SourceSpec.public` signifie « autorisé par la politique IvoireData pour ingestion automatique ».
-
-- `OPEN` / `OPEN_PUBLIC` : automatique possible ;
-- `MIXED` : uniquement avec `metadata_only=true` ;
-- `D_*` : non automatique.
+- `OPEN` / `OPEN_PUBLIC` : ingestion automatique possible ;
+- `MIXED` : uniquement `metadata_only=true` ;
+- `D_*` : jamais en auto-sync.
 
 ## CLI
 
 ```bash
 ivoiredata sources --public
 ivoiredata coverage
-ivoiredata inventory
 ivoiredata status --public
+ivoiredata audit
+ivoiredata inventory
 ivoiredata source-path SOURCE_ID
 ivoiredata sync SOURCE_ID
-ivoiredata sync --due
+ivoiredata sync --all-public --force
 ivoiredata scheduler --once
 ivoiredata scheduler --interval 3600
 ivoiredata query SOURCE_ID "SELECT ..."
 ```
 
-## API
+## Invariants v0.7
 
-FastAPI expose santé, sources, statut, couverture, inventaire, chemin d'une source, synchronisation, recherche documentaire et requêtes SQL par source.
-
-## Handoff entraînement
-
-- [`DATA_HANDOFF_CONTRACT.md`](DATA_HANDOFF_CONTRACT.md) : contrat physique/logique ;
-- [`DOWNSTREAM_AUTOMATION.md`](DOWNSTREAM_AUTOMATION.md) : nettoyage → filtres → PII → qualité → dedup → corpus → tokenizer → packing/sharding → loader.
-
-## Limites assumées
-
-- pas de DB serveur ;
-- pas de contournement d'accès ;
-- les microdonnées contrôlées restent hors auto-sync ;
-- certains portails demandent encore un connecteur spécialisé pour une extraction exhaustive ;
-- un catalogue bulk n'est pas équivalent à « tout télécharger » : les gros payloads restent soumis à une sélection explicite afin de protéger le stockage local et respecter les conditions de la source.
+1. un `success` ne prouve pas une livraison ;
+2. une source vide doit apparaître `EMPTY` ;
+3. une erreur ne doit pas effacer une ancienne version valide ;
+4. TLS dégradé doit être visible ;
+5. la donnée réelle reste locale ;
+6. un connecteur n’est déclaré validé qu’après test live local + audit.

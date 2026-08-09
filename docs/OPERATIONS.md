@@ -1,6 +1,4 @@
-# Exploitation locale d’IvoireData v0.6
-
-Ce document décrit l’usage quotidien du moteur sur un PC ou serveur local.
+# Exploitation locale d’IvoireData v0.7
 
 ## Vérifier l’installation
 
@@ -8,35 +6,50 @@ Ce document décrit l’usage quotidien du moteur sur un PC ou serveur local.
 ivoiredata coverage
 ivoiredata sources --public
 ivoiredata status --public
+ivoiredata audit
 ivoiredata inventory
 ```
 
-- `coverage` : couverture du registre ;
-- `status` : fraîcheur et dernier résultat par source ;
-- `inventory` : état du `data_lake/catalog.json` avec domaines et sources réellement synchronisés.
+- `coverage` : ce que le registre/config prévoit ;
+- `status` : dernier résultat + métriques du manifest ;
+- `audit` : couverture réellement livrée ;
+- `inventory` : catalogue local complet.
 
 ## Synchroniser une source
 
 ```bash
 ivoiredata sync civ_datagouv_catalog
 ivoiredata sync civ_worldbank_wdi
-ivoiredata sync civ_ilostat
+ivoiredata sync civ_ilostat --force
+ivoiredata sync civ_faostat --force
+ivoiredata sync civ_uis --force
 ```
 
-Forcer une vérification :
+Après un sync :
 
 ```bash
-ivoiredata sync civ_dgi --force
+ivoiredata audit
+ivoiredata source-path civ_faostat
 ```
 
-Après succès, vérifier :
+Ne jamais conclure à partir de `status=success` seul. Vérifier `delivery_status`, `rows`, fichiers raw et warnings.
+
+## Synchronisation complète
 
 ```bash
-ivoiredata source-path civ_dgi
-ivoiredata inventory
+ivoiredata sync --all-public --force
+ivoiredata audit
 ```
 
-La source doit avoir un dossier :
+Pour l’exploitation continue :
+
+```bash
+ivoiredata scheduler --interval 3600
+```
+
+Le scheduler respecte `refresh_hours` de chaque source.
+
+## Dossiers
 
 ```text
 data_lake/domains/<domain>/<source_id>/
@@ -46,55 +59,22 @@ data_lake/domains/<domain>/<source_id>/
 └── manifest.json
 ```
 
-## Synchroniser les sources dues
+Le manifest v2 contient `sync`, `delivery`, `freshness`, `transport`, `rights` et `warnings`.
 
-```bash
-ivoiredata scheduler --once
-```
-
-Scheduler permanent :
-
-```bash
-ivoiredata scheduler --interval 3600
-```
-
-Le scheduler se réveille toutes les heures mais respecte `refresh_hours` propre à chaque source.
-
-## Première alimentation complète
-
-Pour essayer toutes les sources publiques configurées :
-
-```bash
-ivoiredata sync --all-public
-```
-
-Cette commande peut être longue et certains upstream peuvent échouer temporairement. Une erreur d'une source n'efface pas les données déjà livrées par les autres.
-
-Pour les opérations quotidiennes, préférer le scheduler plutôt qu'un `--all-public` forcé.
-
-## Requêtes locales
-
-Chaque source est interrogée séparément :
-
-```bash
-ivoiredata query civ_worldbank_wdi "SELECT * FROM worldbank_wdi LIMIT 20"
-```
-
-Les fichiers `tables/` étant en Parquet, ils peuvent aussi être lus directement avec DuckDB, pandas, PyArrow ou le pipeline de l'équipe modèle.
-
-## API locale
+## API
 
 ```bash
 uvicorn ivoiredata.api:app --host 127.0.0.1 --port 8000
 ```
 
-Endpoints utiles :
+Endpoints :
 
 ```text
 GET  /health
 GET  /sources
 GET  /status
 GET  /coverage
+GET  /audit
 GET  /inventory
 GET  /sources/{source_id}/path
 POST /sync/{source_id}
@@ -102,54 +82,79 @@ GET  /search/documents
 POST /query/source/{source_id}
 ```
 
-## Windows
+## Incidents
 
-`scripts/install_windows_scheduler.ps1` crée une tâche planifiée locale. Le compte Windows utilisé doit avoir accès au dossier IvoireData, au dossier de données et à Internet.
+### Upstream indisponible
 
-## Diagnostic
+Le dernier essai passe en `ERROR`. Si une ancienne livraison valide existe :
 
-Ordre recommandé :
+```text
+sync_status      ERROR
+delivery_status  <niveau existant>
+freshness_status STALE
+warning          SYNC_ERROR_WITH_STALE_DATA
+```
 
-1. `ivoiredata status --public` ;
-2. `ivoiredata inventory` ;
-3. `data_lake/domains/<domain>/<source>/manifest.json` ;
-4. `.ivoiredata/state/freshness.json` ;
-5. espace disque ;
-6. URL upstream ;
-7. `robots.txt` pour les crawlers ;
-8. changement d'API/format côté producteur.
+Ne pas supprimer la dernière donnée valide.
 
-## Politique d'incident
+### TLS cassé côté upstream
 
-- **source indisponible** : garder la dernière donnée locale et enregistrer l'erreur ;
-- **payload invalide** : ne pas marquer la synchronisation réussie ;
-- **schéma upstream modifié** : adapter connecteur + tests ;
-- **licence/conditions modifiées** : désactiver `auto_sync` pendant réévaluation ;
-- **disque plein** : arrêter les gros snapshots avant corruption, libérer/déplacer le data lake puis reprendre ;
-- **fichier `.part`** : considérer le téléchargement comme incomplet ;
-- **manifest erreur** : le `catalog.json` doit refléter l'état et ne pas transformer l'erreur en succès.
+`verify_ssl=false` est un fallback explicite pour quelques sites institutionnels mal configurés. L’audit doit afficher :
+
+```text
+transport_security DEGRADED_TLS
+warning            TLS_VERIFICATION_DISABLED
+```
+
+### Success mais aucune donnée
+
+```text
+sync_status      SUCCESS
+delivery_status  EMPTY
+warning          EMPTY_AFTER_SUCCESS
+```
+
+C’est un incident de couverture, pas une source considérée terminée.
+
+### Changement API/format
+
+1. isoler la source ;
+2. conserver le raw déjà valide ;
+3. corriger le connecteur ;
+4. ajouter un test hors réseau ;
+5. resynchroniser la source ;
+6. vérifier `ivoiredata audit`.
+
+## Requêtes locales
+
+```bash
+ivoiredata query civ_worldbank_wdi "SELECT * FROM worldbank_wdi LIMIT 20"
+```
+
+Les tables peuvent aussi être lues directement avec DuckDB, pandas ou PyArrow.
+
+## Migration v0.6 → v0.7
+
+Les manifests v0.6 ne contiennent pas les nouveaux champs. Après `git pull` et rebuild/install :
+
+```bash
+ivoiredata sync --all-public --force
+ivoiredata audit
+```
+
+Cela réécrit les manifests v2 à partir des fichiers réellement présents.
 
 ## Sauvegarde
 
-Sauvegarder :
+Sauvegarder sur un second disque :
 
 ```text
 data_lake/
 .ivoiredata/
 ```
 
-sur un second disque. GitHub contient seulement le code/config/docs.
+GitHub garde uniquement le code/config/docs.
 
 ## Handoff équipe modèle
 
-IvoireData ne lance plus officiellement `corpus-build`/`tokenizer-train`. L'équipe modèle consomme :
-
-```text
-data_lake/catalog.json
-+
-data_lake/domains/.../manifest.json
-+
-raw/ tables/ documents/
-```
-
-Voir [`DATA_HANDOFF_CONTRACT.md`](DATA_HANDOFF_CONTRACT.md) et [`DOWNSTREAM_AUTOMATION.md`](DOWNSTREAM_AUTOMATION.md).
+Le downstream consomme `catalog.json`, les `manifest.json`, `raw/`, `tables/` et `documents/`. Voir [`DATA_HANDOFF_CONTRACT.md`](DATA_HANDOFF_CONTRACT.md) et [`DOWNSTREAM_AUTOMATION.md`](DOWNSTREAM_AUTOMATION.md).
