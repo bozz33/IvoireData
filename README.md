@@ -1,41 +1,107 @@
 # IvoireData 🇨🇮
 
-**v0.4.0 — moteur fédéré de données + usine IvoireCorpus, construit sur dlt OSS**
+**v0.4.1 — moteur local de données + usine IvoireCorpus, construit sur dlt OSS**
 
-IvoireData ne stocke pas les gros datasets dans GitHub. Le dépôt contient le moteur, les connecteurs, le registre, les règles de fraîcheur, la qualité, la provenance, la fabrication de corpus et l'API. Les données réelles vont vers un filesystem local ou un stockage S3-compatible (MinIO, R2, S3...).
+IvoireData collecte, met à jour, normalise, contrôle et prépare les données utiles à une IA ivoirienne. Le code est dans GitHub ; **toutes les données réelles restent sur le PC**.
+
+Aucun S3, R2 ou MinIO n'est utilisé.
+
+## Architecture locale
+
+```text
+APIs / sites / PDF / CSV / XLSX / Parquet
+                    │
+               Connecteurs
+                    │
+                   dlt
+                    │
+       ┌────────────┴────────────┐
+       │                         │
+ data_lake/ local          .ivoiredata/
+ données normalisées       état/checkpoints
+       │
+       ├──────── Query / Search
+       │
+       └──────── Corpus Builder
+                       │
+                  corpora/
+                       │
+                   tokenizer/
+```
 
 ## Fonctionnalités
-- dlt comme moteur Extract/Normalize/Load et état incrémental ;
-- `data.gouv.ci` Data Fair : catalogue + table par dataset + détection de changement ;
+
+- dlt comme moteur Extract/Normalize/Load ;
+- `data.gouv.ci` Data Fair : catalogue et jeux de données dynamiques ;
 - pages/PDF publics avec SHA-256 et chunks ;
 - CSV/JSON/JSONL/XLS/XLSX/Parquet ;
-- registre multisectoriel et résolution automatique du connecteur ;
-- updater/scheduler avec `refresh_hours` ;
-- destination locale ou S3/MinIO ;
-- SQL read-only via le client filesystem/DuckDB de dlt ;
+- registre multisectoriel ;
+- détection automatique du connecteur ;
+- règles `refresh_hours` et scheduler **local** ;
+- détection de changements et checkpoints ;
+- requêtes SQL locales ;
 - ranking et cross-check des sources ;
 - recherche documentaire ;
-- nettoyage, qualité, déduplication, IvoireCorpus versionné ;
+- nettoyage, qualité et déduplication ;
+- IvoireCorpus versionné et immuable ;
 - tokenizer BPE optionnel ;
-- FastAPI + CLI + Docker Compose ;
-- CI et synchronisations GitHub planifiées.
+- FastAPI + CLI ;
+- Docker local sans service de stockage externe ;
+- CI GitHub uniquement pour valider le code.
 
-## Démarrage
+## Installation
+
 ```bash
 python -m pip install -e '.[dev]'
 ivoiredata sources --public
 ivoiredata sync civ_datagouv_catalog
-ivoiredata query 'SELECT * FROM datagouv_catalog LIMIT 5'
-uvicorn ivoiredata.api:app --host 0.0.0.0 --port 8000
+ivoiredata status --public
 ```
 
 ## Mise à jour continue
-`configs/runtime_sources.json` contrôle la fréquence. `civ_datagouv_catalog` est synchronisé quotidiennement. Les connecteurs utilisent état dlt + signatures/hash pour ne retélécharger que les changements.
+
+Une vérification immédiate :
+
+```bash
+ivoiredata scheduler --once
+```
+
+Un scheduler local permanent :
+
+```bash
+ivoiredata scheduler --interval 3600
+```
+
+Le scheduler vérifie les sources toutes les heures mais respecte la fréquence propre à chaque source dans `configs/runtime_sources.json`. Une source inchangée n'est pas retraitée inutilement.
+
+## API locale
+
+```bash
+uvicorn ivoiredata.api:app --host 127.0.0.1 --port 8000
+```
+
+Endpoints principaux :
+
+- `GET /health`
+- `GET /sources`
+- `GET /status`
+- `POST /sync/{source_id}`
+- `GET /search/documents`
+- `POST /query/sql`
 
 ## Corpus
+
 ```bash
 ivoiredata corpus-build civ-0.1 TABLE1 TABLE2 --output corpora
 ```
-Les corpus sont immuables ; une mise à jour produit une nouvelle version.
 
-Voir `docs/ENGINE.md`, `docs/DEPLOYMENT.md`, `docs/CORPUS.md`.
+Les corpus sont figés. Une mise à jour des sources produit ensuite une nouvelle version de corpus.
+
+Tokenizer optionnel :
+
+```bash
+python -m pip install -e '.[training]'
+ivoiredata tokenizer-train corpora/civ-0.1 --vocab-size 32000
+```
+
+Voir `docs/ENGINE.md`, `docs/DEPLOYMENT.md` et `docs/CORPUS.md`.

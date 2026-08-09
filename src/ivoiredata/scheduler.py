@@ -1,9 +1,27 @@
 from __future__ import annotations
-import os,time
+
+import os
+import time
+
 from .engine import IvoireDataEngine
-def main()->None:
-    interval=max(300,int(os.getenv("IVOIREDATA_SCHEDULER_INTERVAL","3600")))
+
+
+def run_once():
+    return IvoireDataEngine().sync_due(auto_only=True, public_only=True)
+
+
+def run_forever(interval: int | None = None) -> None:
+    interval = interval or int(os.getenv("IVOIREDATA_SCHEDULER_INTERVAL", "3600"))
+    interval = max(300, interval)
     while True:
-        for result in IvoireDataEngine().sync_due(auto_only=True,public_only=True):print(result)
+        for result in run_once():
+            print(result)
         time.sleep(interval)
-if __name__=="__main__":main()
+
+
+def main() -> None:
+    run_forever()
+
+
+if __name__ == "__main__":
+    main()
