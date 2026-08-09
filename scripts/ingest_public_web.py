@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Fetch one public URL into a provenance-rich local RAG snapshot.
-
-Raw bytes stay in gitignored local storage for sources whose redistribution
-rights are unclear. No authentication, CAPTCHA, paywall or role bypass.
+Raw bytes stay in gitignored local storage when redistribution rights are unclear.
+No authentication, CAPTCHA, paywall or role bypass.
 """
 from __future__ import annotations
 import argparse, hashlib, html, io, json, pathlib, re, time
@@ -19,7 +18,7 @@ def allowed(url:str)->bool:
     except Exception:
         return True
 
-def fetch(url:str,max_mb:int):
+def fetch(url:str,max_mb:int=100):
     req=urllib.request.Request(url,headers={'User-Agent':UA,'Accept':'text/html,application/pdf,text/plain,*/*;q=0.5'})
     with urllib.request.urlopen(req,timeout=90) as r:
         data=r.read(max_mb*1024*1024+1)
@@ -28,9 +27,9 @@ def fetch(url:str,max_mb:int):
 
 def html_text(data:bytes)->str:
     s=data.decode('utf-8','replace')
-    s=re.sub(r'(?is)<(script|style|noscript).*?>.*?</\\1>',' ',s)
+    s=re.sub(r'(?is)<(script|style|noscript).*?>.*?</\1>',' ',s)
     s=re.sub(r'(?s)<[^>]+>',' ',s)
-    return re.sub(r'\\s+',' ',html.unescape(s)).strip()
+    return re.sub(r'\s+',' ',html.unescape(s)).strip()
 
 def pdf_text(data:bytes)->str:
     try:
@@ -40,7 +39,7 @@ def pdf_text(data:bytes)->str:
     return '\n'.join((p.extract_text() or '') for p in PdfReader(io.BytesIO(data)))
 
 def chunks(text:str,size:int=2200,overlap:int=250):
-    text=re.sub(r'\\s+',' ',text).strip(); i=0
+    text=re.sub(r'\s+',' ',text).strip(); i=0
     while i<len(text):
         j=min(len(text),i+size); yield text[i:j]
         if j==len(text): break
