@@ -1,63 +1,85 @@
-# Couverture multisectorielle — v0.5.0
+# Couverture multisectorielle — v0.6.0
 
-Les langues restent volontairement hors périmètre actif. La couverture ci-dessous décrit **le niveau technique réellement implémenté**, pas seulement les sources connues.
+Cette matrice décrit **ce que le moteur livre réellement**, pas seulement les URLs connues.
 
-## Niveaux
+## Niveaux de livraison
 
-- **Structuré** : connecteur dédié, données transformées en tables ou snapshot local vérifiable.
-- **Bulk catalog** : catalogue officiel suivi automatiquement, gros fichiers téléchargés seulement sur sélection.
-- **Web public** : crawl/documentation/PDF avec hash et provenance.
-- **Metadata only** : catalogue public synchronisé mais microdonnées contrôlées exclues.
-- **Manuel/contrôlé** : source référencée mais aucune ingestion automatique du payload.
+- **FULL_STRUCTURED** : payload réel + représentation structurée locale.
+- **SNAPSHOT** : fichier réel local vérifiable + métadonnées/checksum.
+- **WEB_DOCUMENTS** : pages/documents publics réellement récupérés + table documentaire.
+- **CATALOG_ONLY** : catalogue/links réels, mais gros payloads non téléchargés sans sélection.
+- **METADATA_ONLY** : métadonnées publiques uniquement, payload contrôlé volontairement exclu.
+- **CONTROLLED** : référencé mais téléchargement automatique interdit par la politique.
 
-| Secteur | Sources prioritaires | Niveau v0.5 |
+Toutes les sorties v0.6 sont rangées sous `data_lake/domains/<domain>/<source_id>/`.
+
+| Secteur | Source | Livraison v0.6 |
 |---|---|---|
-| Open data national | data.gouv.ci | **Structuré** : Data Fair catalogue + datasets |
-| Statistiques nationales | ANStat / NADA | **Metadata only** pour le catalogue ; microdonnées contrôlées manuelles |
-| Fiscalité / FNE | DGI | **Web public** automatique |
-| Droit / Justice | OHADA, Ministère Justice | **Web public** automatique |
-| Administration | Service Public | **Web public** automatique |
-| Dette publique | Trésor | **Web public** automatique |
-| Marchés publics | DGMP | **Web public** automatique |
-| Douanes / commerce | Douanes | **Web public** automatique |
-| Finance | BCEAO / APIF | **Web public** automatique |
-| Agriculture nationale | data.gouv.ci, Ministère Agriculture | structuré + web public |
-| Agriculture internationale | FAOSTAT | **Bulk catalog** automatique ; payloads volumineux sur sélection |
-| Travail / emploi | ILOSTAT | **Structuré** pour CIV, fréquence annuelle par défaut |
-| Santé nationale | RASS, E-DEPPS | **Web public** automatique |
-| Santé internationale | WHO | **Web public** pendant la transition de l’API WHO |
-| Éducation nationale | MENA | **Web public** automatique |
-| Éducation internationale | UNESCO UIS | **Bulk catalog** automatique |
-| Télécoms | ARTCI | **Web public** automatique |
-| Mines / pétrole / énergie | MMPE, MNV | **Web public** automatique |
-| Environnement | Ministère / SIE | **Web public** automatique |
-| Climat international | World Bank Climate | **Web public** ; connecteur spécialisé à développer si besoin analytique |
-| Transport | Ministère Transports | **Web public** automatique |
-| Foncier / logement | IDUFCI / Construction | **Web public** automatique |
-| Eau / assainissement | ONEP / ONAD | **Web public** automatique |
-| Météo | SODEXAM | **Web public** automatique |
-| Géographie administrative | geoBoundaries | **Structuré** GeoJSON |
-| Géographie OSM | Geofabrik | **Structuré snapshot** PBF local + checksums |
-| Développement macro | World Bank WDI | **Structuré** API v2 CIV |
-| Projets World Bank | World Bank Projects | **Web public** actuellement |
+| Open data national | data.gouv.ci | **FULL_STRUCTURED** : CSV bruts + tables Parquet + catalogue |
+| Statistiques nationales | ANStat/NADA | **METADATA_ONLY** : catalogue public ; microdonnées contrôlées exclues |
+| Fiscalité/FNE | DGI | **WEB_DOCUMENTS** |
+| Droit | OHADA | **WEB_DOCUMENTS** |
+| Justice | Ministère Justice | **WEB_DOCUMENTS** |
+| Administration | Service Public | **WEB_DOCUMENTS** |
+| Dette | Trésor | **WEB_DOCUMENTS** |
+| Marchés publics | DGMP | **WEB_DOCUMENTS** |
+| Douanes/commerce | Douanes | **WEB_DOCUMENTS** |
+| Finance | BCEAO/APIF | **WEB_DOCUMENTS** actuellement |
+| Agriculture nationale | data.gouv.ci + Ministère Agriculture | **FULL_STRUCTURED + WEB_DOCUMENTS** |
+| Agriculture internationale | FAOSTAT | **CATALOG_ONLY** par défaut ; payloads via sélection `download_patterns` |
+| Travail/emploi | ILOSTAT | **FULL_STRUCTURED** : RDS CIV + Parquet |
+| Santé nationale | RASS/E-DEPPS | **WEB_DOCUMENTS** |
+| Santé internationale | WHO | **WEB_DOCUMENTS** tant que l'interface structurée actuelle n'est pas validée |
+| Éducation nationale | MENA | **WEB_DOCUMENTS** |
+| Éducation internationale | UNESCO UIS | **CATALOG_ONLY** par défaut |
+| Télécoms | ARTCI | **WEB_DOCUMENTS** |
+| Mines/pétrole/énergie | MMPE/MNV | **WEB_DOCUMENTS** |
+| Environnement | Ministère/SIE | **WEB_DOCUMENTS** |
+| Climat international | World Bank Climate | **WEB_DOCUMENTS** actuellement |
+| Transport | Ministère Transports | **WEB_DOCUMENTS** |
+| Foncier/logement | IDUFCI/Construction | **WEB_DOCUMENTS** |
+| Eau/assainissement | ONEP/ONAD | **WEB_DOCUMENTS** |
+| Météo | SODEXAM | **WEB_DOCUMENTS** |
+| Géographie administrative | geoBoundaries | **FULL_STRUCTURED** |
+| Géographie OSM | Geofabrik | **SNAPSHOT** PBF local + checksum |
+| Développement macro | World Bank WDI | **FULL_STRUCTURED** : réponses JSON + tables Parquet |
+| Projets World Bank | World Bank Projects | **WEB_DOCUMENTS** actuellement |
 
-## Ce qui est prêt pour l’auto-update local
+## Pourquoi `CATALOG_ONLY` est distingué
 
-Les sources configurées avec `auto_sync=true` sont contrôlées par `configs/runtime_sources.json`. La commande :
+Un catalogue FAOSTAT/UIS est une vraie donnée utile pour découvrir les fichiers disponibles, mais ce n'est **pas** l'équivalent d'avoir les séries statistiques dans le data lake. IvoireData ne doit donc jamais présenter `CATALOG_ONLY` comme couverture complète.
+
+La transition vers `FULL_STRUCTURED` se fait après validation d'un connecteur/API ou sélection de fichiers bulk pertinents.
+
+## Vérification runtime
 
 ```bash
 ivoiredata coverage
+ivoiredata inventory
+ivoiredata status --public
 ```
 
-fournit le nombre actuel de sources auto, leur répartition par connecteur et domaine.
+`coverage` décrit le registre/configuration ; `inventory` décrit les packages présents dans le data lake.
 
-## Ce qui reste volontairement non automatique
+## Sources contrôlées
 
-- microdonnées ANStat nécessitant une acceptation/autorisation ;
-- datasets classés `D_*` ;
-- fichiers pour lesquels la redistribution ou l’accès n’est pas suffisamment clair ;
-- téléchargements bulk potentiellement massifs tant qu’aucun motif n’est explicitement configuré.
+Restent hors téléchargement automatique :
 
-## Principe de vérité
+- microdonnées ANStat soumises à conditions ;
+- datasets `D_*` ;
+- payloads nécessitant authentification/acceptation spécifique ;
+- fichiers dont le mode d'accès n'autorise pas l'ingestion automatique selon la politique du projet.
 
-Une source n’est pas considérée « couverte » simplement parce que son URL est dans le registre. La couverture devient réelle lorsqu’un connecteur est configuré, testé et capable de conserver provenance + fraîcheur + résultat local.
+## Cible
+
+La cible opérationnelle est de faire progresser les sources prioritaires de :
+
+```text
+WEB_DOCUMENTS / CATALOG_ONLY
+            ↓
+connecteur spécialisé validé
+            ↓
+FULL_STRUCTURED
+```
+
+lorsque l'upstream fournit une interface officielle adaptée.
