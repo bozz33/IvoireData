@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from ivoiredata.connectors.bulk_catalog import _Links
+from ivoiredata.connectors.public_web import _same_host_links
 from ivoiredata.models import SourceSpec
 from ivoiredata.settings import Settings
 
@@ -21,6 +22,16 @@ def test_mixed_metadata_only_is_syncable():
     assert not _spec(access_tier="OPEN", rights_tier="D_RESEARCH_OR_DATASET_TERMS").public
 
 
+def test_metadata_only_filters_microdata_download_links():
+    links = ["/catalog/34", "/catalog/34/data-dictionary", "/catalog/34/get-microdata", "/files/data.sav", "https://other.example/file"]
+    result = _same_host_links("https://nada.example/catalog", links, metadata_only=True)
+    assert "https://nada.example/catalog/34" in result
+    assert "https://nada.example/catalog/34/data-dictionary" in result
+    assert all("microdata" not in link for link in result)
+    assert all(not link.endswith(".sav") for link in result)
+    assert all("other.example" not in link for link in result)
+
+
 def test_bulk_link_parser():
     parser = _Links()
     parser.feed('<a href="file.csv">CSV data</a><a href="/doc">Documentation</a>')
@@ -34,10 +45,5 @@ def test_local_settings_create_file_uri(tmp_path: Path):
 
 
 def test_runtime_connectors_are_declared():
-    settings = Settings()
-    # Configuration is tested through registry parsing in the existing suite;
-    # this test protects the connector names introduced by v0.5 from typos.
     allowed = {"data_gouv_ci", "world_bank_wdi", "geoboundaries", "ilostat_ref_area", "osm_geofabrik", "bulk_catalog", "public_web", "http_file"}
-    assert "ilostat_ref_area" in allowed
-    assert "osm_geofabrik" in allowed
-    assert "bulk_catalog" in allowed
+    assert {"ilostat_ref_area", "osm_geofabrik", "bulk_catalog"} <= allowed
