@@ -120,6 +120,7 @@ Une version de corpus utilisée pour un entraînement n’est jamais modifiée. 
 | [`docs/ENGINE.md`](docs/ENGINE.md) | fonctionnement interne du moteur |
 | [`docs/CONNECTORS.md`](docs/CONNECTORS.md) | types de connecteurs et comportement |
 | [`docs/SOURCES.md`](docs/SOURCES.md) | familles de sources, stratégie et fréquence |
+| [`docs/UPSTREAM_SOURCES.md`](docs/UPSTREAM_SOURCES.md) | références officielles des systèmes upstream |
 | [`docs/SOURCE_COVERAGE.md`](docs/SOURCE_COVERAGE.md) | couverture réellement implémentée |
 | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | exploitation quotidienne, sync, incidents |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | installation locale Windows/Linux/Docker |
