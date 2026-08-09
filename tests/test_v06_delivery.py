@@ -3,6 +3,7 @@ from pathlib import Path
 
 from ivoiredata.delivery import ensure_source_layout, rebuild_catalog, source_paths, write_source_manifest
 from ivoiredata.models import SourceSpec
+from ivoiredata.pipeline import get_source_pipeline
 from ivoiredata.settings import Settings
 from ivoiredata.snapshots import save_snapshot
 
@@ -60,3 +61,15 @@ def test_source_paths_are_stable(tmp_path: Path):
     b = source_paths(settings, spec(domain="law_justice", source_id="civ_justice"))
     assert a == b
     assert "law_justice" in str(a["root"])
+
+
+def test_isolated_source_pipeline_writes_parquet(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("DLT_DATA_DIR", str(tmp_path / "dlt_state"))
+    settings = Settings(data_dir=tmp_path / "lake", pipeline_name="ivoiredata_test_delivery")
+    s = spec(source_id="civ_pipeline_test")
+    pipeline = get_source_pipeline(settings, s)
+    pipeline.run([{"value": 1}, {"value": 2}], table_name="sample", loader_file_format="parquet")
+    paths = source_paths(settings, s)
+    parquet = list(paths["tables"].rglob("*.parquet"))
+    assert parquet
+    assert any("sample" in str(path) for path in parquet)
