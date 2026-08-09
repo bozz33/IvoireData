@@ -10,9 +10,10 @@ from .connectors.ilostat import ilostat_ref_area_resource
 from .connectors.osm_geofabrik import geofabrik_snapshot_resource
 from .connectors.public_web import public_document_resource
 from .connectors.world_bank import world_bank_wdi_resource
+from .delivery import ensure_source_layout, rebuild_catalog, write_source_manifest
 from .freshness import FreshnessStore
 from .models import SourceSpec, SyncResult
-from .pipeline import get_pipeline
+from .pipeline import get_source_pipeline
 from .registry import SourceRegistry
 from .settings import Settings
 
@@ -28,24 +29,29 @@ class IvoireDataEngine:
         self.freshness = FreshnessStore(self.settings.state_dir / "freshness.json")
 
     def _resource_for(self, spec: SourceSpec, *, force: bool = False):
+        p = ensure_source_layout(self.settings, spec)
+        o = spec.options
         if spec.connector == "data_gouv_ci":
             dsid = None if spec.source_id == "civ_datagouv_catalog" else dataset_id_from_public_url(spec.source_url)
-            return data_gouv_ci_resource(dataset_ids=[dsid] if dsid else None, force=force, user_agent=self.settings.user_agent, limit=spec.options.get("limit"))
+            return data_gouv_ci_resource(dataset_ids=[dsid] if dsid else None, force=force, user_agent=self.settings.user_agent, limit=o.get("limit"), snapshot_dir=p["raw"])
         if spec.connector == "http_file":
-            return http_file_resource(source_id=spec.source_id, url=spec.source_url, force=force, user_agent=self.settings.user_agent)
+            return http_file_resource(source_id=spec.source_id, url=spec.source_url, force=force, user_agent=self.settings.user_agent, snapshot_dir=p["raw"])
         if spec.connector == "world_bank_wdi":
-            return world_bank_wdi_resource(country=str(spec.options.get("country", "CIV")), source=int(spec.options.get("source", 2)), indicator_limit=spec.options.get("indicator_limit"), batch_size=int(spec.options.get("batch_size", 60)), user_agent=self.settings.user_agent)
+            return world_bank_wdi_resource(country=str(o.get("country", "CIV")), source=int(o.get("source", 2)), indicator_limit=o.get("indicator_limit"), batch_size=int(o.get("batch_size", 60)), user_agent=self.settings.user_agent, snapshot_dir=p["raw"])
         if spec.connector == "geoboundaries":
             return geoboundaries_resource(api_url=spec.source_url, source_id=spec.source_id, user_agent=self.settings.user_agent)
         if spec.connector == "ilostat_ref_area":
-            return ilostat_ref_area_resource(country=str(spec.options.get("country", "CIV")), frequencies=spec.options.get("frequencies", ["A"]), base_url=str(spec.options.get("base_url", "https://rplumber.ilo.org/files/ref_area")), user_agent=self.settings.user_agent)
+            return ilostat_ref_area_resource(country=str(o.get("country", "CIV")), frequencies=o.get("frequencies", ["A"]), base_url=str(o.get("base_url", "https://rplumber.ilo.org/files/ref_area")), user_agent=self.settings.user_agent, snapshot_dir=p["raw"])
         if spec.connector == "osm_geofabrik":
-            return geofabrik_snapshot_resource(page_url=spec.source_url, output_dir=self.settings.data_dir / "raw_external" / spec.source_id, source_id=spec.source_id, format=str(spec.options.get("format", "pbf")), user_agent=self.settings.user_agent)
+            return geofabrik_snapshot_resource(page_url=spec.source_url, output_dir=p["raw"], source_id=spec.source_id, format=str(o.get("format", "pbf")), user_agent=self.settings.user_agent)
         if spec.connector == "bulk_catalog":
-            return bulk_catalog_resource(source_id=spec.source_id, page_url=spec.source_url, user_agent=self.settings.user_agent, download_dir=self.settings.data_dir / "raw_external" / spec.source_id, download_patterns=list(spec.options.get("download_patterns", [])), max_downloads=int(spec.options.get("max_downloads", 0)), max_bytes=int(spec.options.get("max_bytes", 250_000_000)))
+            return bulk_catalog_resource(source_id=spec.source_id, page_url=spec.source_url, user_agent=self.settings.user_agent, download_dir=p["raw"], download_patterns=list(o.get("download_patterns", [])), max_downloads=int(o.get("max_downloads", 0)), max_bytes=int(o.get("max_bytes", 250_000_000)))
         if spec.connector == "public_web":
-            return public_document_resource(source_id=spec.source_id, url=spec.source_url, force=force, user_agent=self.settings.user_agent, crawl=bool(spec.options.get("crawl", False)), max_pages=int(spec.options.get("max_pages", 1)), max_bytes=int(spec.options.get("max_bytes", 20_000_000)), metadata_only=bool(spec.options.get("metadata_only", False)))
+            return public_document_resource(source_id=spec.source_id, url=spec.source_url, force=force, user_agent=self.settings.user_agent, crawl=bool(o.get("crawl", False)), max_pages=int(o.get("max_pages", 1)), max_bytes=int(o.get("max_bytes", 20_000_000)), metadata_only=bool(o.get("metadata_only", False)), snapshot_dir=p["documents"])
         raise ValueError(f"unsupported connector {spec.connector!r} for {spec.source_id}")
+
+    def _catalog(self) -> None:
+        rebuild_catalog(self.settings, self.registry.list())
 
     def sync(self, source_id: str, *, force: bool = False) -> SyncResult:
         spec = self.registry.get(source_id)
@@ -53,26 +59,25 @@ class IvoireDataEngine:
             raise PermissionError(f"{source_id} is not configured for unattended public ingestion")
         started = _now()
         try:
-            info = get_pipeline(self.settings).run(self._resource_for(spec, force=force)); details = str(info)
+            details = str(get_source_pipeline(self.settings, spec).run(self._resource_for(spec, force=force)))
+            finished = _now()
             self.freshness.mark(source_id, success=True, details=details)
-            return SyncResult(source_id, "success", started, _now(), spec.connector, details)
+            write_source_manifest(self.settings, spec, status="success", connector=spec.connector, started_at=started, finished_at=finished, details=details)
+            self._catalog()
+            return SyncResult(source_id, "success", started, finished, spec.connector, details)
         except Exception as exc:
-            self.freshness.mark(source_id, success=False, details=str(exc))
-            return SyncResult(source_id, "error", started, _now(), spec.connector, str(exc))
+            finished = _now(); details = str(exc)
+            self.freshness.mark(source_id, success=False, details=details)
+            write_source_manifest(self.settings, spec, status="error", connector=spec.connector, started_at=started, finished_at=finished, details=details)
+            self._catalog()
+            return SyncResult(source_id, "error", started, finished, spec.connector, details)
 
     def sync_due(self, *, auto_only: bool = True, public_only: bool = True, force: bool = False) -> list[SyncResult]:
-        results = []
-        for spec in self.registry.list(public_only=public_only, auto_only=auto_only):
-            if force or self.freshness.due(spec):
-                results.append(self.sync(spec.source_id, force=force))
-        return results
+        return [self.sync(s.source_id, force=force) for s in self.registry.list(public_only=public_only, auto_only=auto_only) if force or self.freshness.due(s)]
 
     def coverage(self) -> dict:
-        specs = self.registry.list()
-        public = [s for s in specs if s.public]
-        automatic = [s for s in public if s.auto_sync]
-        by_connector: dict[str, int] = {}
-        by_domain: dict[str, int] = {}
+        specs = self.registry.list(); public = [s for s in specs if s.public]; automatic = [s for s in public if s.auto_sync]
+        by_connector: dict[str, int] = {}; by_domain: dict[str, int] = {}
         for spec in automatic:
             by_connector[spec.connector] = by_connector.get(spec.connector, 0) + 1
             by_domain[spec.domain] = by_domain.get(spec.domain, 0) + 1
