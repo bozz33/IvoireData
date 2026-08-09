@@ -6,6 +6,9 @@ data/processed/*
 data/quarantine/*
 !data/quarantine/.gitkeep
 
+# Materialized v0.3 data lake (raw + processed + manifests)
+data_lake/
+
 # Public-source local ingestion cache
 cache/
 *.pdf.tmp
