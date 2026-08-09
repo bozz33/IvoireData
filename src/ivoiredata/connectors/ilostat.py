@@ -5,14 +5,18 @@ import tempfile
 from pathlib import Path
 from typing import Iterable
 
+from ..snapshots import save_snapshot
 
-def ilostat_ref_area_resource(*, country: str = "CIV", frequencies: Iterable[str] = ("A",), base_url: str = "https://rplumber.ilo.org/files/ref_area", user_agent: str = "IvoireData/0.5"):
-    """Load ILOSTAT country datasets from the official bulk backend.
 
-    ILOSTAT publishes country/frequency extracts. The official Rilostat client
-    consumes RDS files from the same backend; pyreadr is used here so IvoireData
-    can normalize them with dlt.
-    """
+def ilostat_ref_area_resource(
+    *,
+    country: str = "CIV",
+    frequencies: Iterable[str] = ("A",),
+    base_url: str = "https://rplumber.ilo.org/files/ref_area",
+    user_agent: str = "IvoireData/0.6",
+    snapshot_dir: Path | None = None,
+):
+    """Load ILOSTAT country datasets from the official bulk backend."""
     import dlt
     import pyreadr
     import requests
@@ -26,7 +30,15 @@ def ilostat_ref_area_resource(*, country: str = "CIV", frequencies: Iterable[str
             url = f"{base_url.rstrip('/')}/{country.upper()}_{freq}.rds"
             response = session.get(url, timeout=240)
             response.raise_for_status()
-            digest = hashlib.sha256(response.content).hexdigest()
+            snapshot = save_snapshot(
+                snapshot_dir,
+                source_id="civ_ilostat",
+                url=url,
+                content=response.content,
+                content_type=response.headers.get("content-type"),
+                name=f"{country.upper()}_{freq}.rds",
+            )
+            digest = str(snapshot["sha256"])
             with tempfile.NamedTemporaryFile(suffix=".rds", delete=False) as tmp:
                 tmp.write(response.content)
                 tmp_path = Path(tmp.name)
@@ -38,6 +50,7 @@ def ilostat_ref_area_resource(*, country: str = "CIV", frequencies: Iterable[str
                     for row in frame.to_dict(orient="records"):
                         row["__ivoiredata_source_url"] = url
                         row["__ivoiredata_raw_sha256"] = digest
+                        row["__ivoiredata_raw_path"] = snapshot.get("local_path")
                         row["__ivoiredata_frequency"] = freq
                         yield dlt.mark.with_table_name(row, f"ilostat_{country.lower()}_{freq.lower()}")
             finally:
