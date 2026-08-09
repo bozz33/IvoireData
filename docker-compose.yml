@@ -1,0 +1,36 @@
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ivoiredata
+      MINIO_ROOT_PASSWORD: ivoiredata-dev-secret
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["minio_data:/data"]
+  create-bucket:
+    image: minio/mc:latest
+    depends_on: [minio]
+    entrypoint: ["/bin/sh", "-c"]
+    command: "until mc alias set local http://minio:9000 ivoiredata ivoiredata-dev-secret; do sleep 2; done; mc mb --ignore-existing local/ivoiredata"
+  api:
+    build: .
+    depends_on: [create-bucket]
+    environment: &engine_env
+      IVOIREDATA_BUCKET_URL: s3://ivoiredata
+      IVOIREDATA_S3_ENDPOINT: http://minio:9000
+      IVOIREDATA_S3_ACCESS_KEY: ivoiredata
+      IVOIREDATA_S3_SECRET_KEY: ivoiredata-dev-secret
+      IVOIREDATA_STATE_DIR: /state
+    volumes: ["engine_state:/state"]
+    ports: ["8000:8000"]
+  scheduler:
+    build: .
+    depends_on: [create-bucket]
+    command: ["python", "-m", "ivoiredata.scheduler"]
+    environment:
+      <<: *engine_env
+      IVOIREDATA_SCHEDULER_INTERVAL: 3600
+    volumes: ["engine_state:/state"]
+volumes:
+  minio_data:
+  engine_state:

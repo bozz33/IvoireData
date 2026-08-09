@@ -6,8 +6,12 @@ data/processed/*
 data/quarantine/*
 !data/quarantine/.gitkeep
 
-# Materialized v0.3 data lake (raw + processed + manifests)
+# Runtime/lake/corpus payloads
 data_lake/
+.ivoiredata/
+.dlt/
+corpora/
+tokenizer/
 
 # Public-source local ingestion cache
 cache/

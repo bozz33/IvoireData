@@ -1,16 +1,30 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ivoiredata"
-version = "0.3.0"
-description = "Côte d’Ivoire multisector public-data materialization, RAG and provenance tooling"
+version = "0.4.0"
+description = "Federated Côte d'Ivoire data engine and training-corpus factory built on dlt"
 requires-python = ">=3.10"
-
+dependencies = [
+  "dlt[filesystem]>=1.29,<2",
+  "requests>=2.32",
+  "pypdf>=5.0",
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "pandas>=2.2",
+  "pyarrow>=17.0",
+  "openpyxl>=3.1",
+  "xlrd>=2.0"
+]
 [project.optional-dependencies]
-ingest = ["pypdf>=5.0"]
-materialize = ["pandas>=2.2", "pyarrow>=17.0"]
+training = ["tokenizers>=0.20"]
 dev = ["pytest>=8.0"]
-
-[tool.setuptools]
-py-modules = []
-
+[project.scripts]
+ivoiredata = "ivoiredata.cli:main"
+[tool.setuptools.packages.find]
+where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]

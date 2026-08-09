@@ -1,90 +1,41 @@
 # IvoireData 🇨🇮
 
-**v0.3.0 — corpus multisectoriel matérialisable pour une IA adaptée à la Côte d’Ivoire**
+**v0.4.0 — moteur fédéré de données + usine IvoireCorpus, construit sur dlt OSS**
 
-La phase active couvre les données ivoiriennes **hors langues** : administration, fiscalité, droit, économie, agriculture, santé, éducation, télécoms, mines/pétrole/énergie, environnement, transport, foncier/logement, eau, météo, géographie et développement.
+IvoireData ne stocke pas les gros datasets dans GitHub. Le dépôt contient le moteur, les connecteurs, le registre, les règles de fraîcheur, la qualité, la provenance, la fabrication de corpus et l'API. Les données réelles vont vers un filesystem local ou un stockage S3-compatible (MinIO, R2, S3...).
 
-## État réel
+## Fonctionnalités
+- dlt comme moteur Extract/Normalize/Load et état incrémental ;
+- `data.gouv.ci` Data Fair : catalogue + table par dataset + détection de changement ;
+- pages/PDF publics avec SHA-256 et chunks ;
+- CSV/JSON/JSONL/XLS/XLSX/Parquet ;
+- registre multisectoriel et résolution automatique du connecteur ;
+- updater/scheduler avec `refresh_hours` ;
+- destination locale ou S3/MinIO ;
+- SQL read-only via le client filesystem/DuckDB de dlt ;
+- ranking et cross-check des sources ;
+- recherche documentaire ;
+- nettoyage, qualité, déduplication, IvoireCorpus versionné ;
+- tokenizer BPE optionnel ;
+- FastAPI + CLI + Docker Compose ;
+- CI et synchronisations GitHub planifiées.
 
-- Le portail officiel `data.gouv.ci` expose **202 jeux de données observés au 2026-08-09**.
-- Jusqu'à v0.2, IvoireData conservait surtout les **liens/métadonnées**, les règles d'ingestion et un petit corpus de faits : les 202 tables n'étaient pas commitées dans Git.
-- v0.3 ajoute la **matérialisation réelle** du catalogue Data Fair : export CSV brut, métadonnées, JSONL enrichi de provenance, Parquet et manifests.
-- Les autres sources publiques (DGI, Justice, CNPS, ARTCI, ministères, etc.) restent intégrables dans `CIV-Public-RAG` sans contourner d'authentification ni d'accès restreint.
-- Langues et speech restent volontairement différés.
-
-## Matérialiser data.gouv.ci
-
+## Démarrage
 ```bash
-python -m pip install -e '.[materialize,dev]'
-python scripts/materialize_data_gouv_ci.py --output data_lake
+python -m pip install -e '.[dev]'
+ivoiredata sources --public
+ivoiredata sync civ_datagouv_catalog
+ivoiredata query 'SELECT * FROM datagouv_catalog LIMIT 5'
+uvicorn ivoiredata.api:app --host 0.0.0.0 --port 8000
 ```
 
-Test rapide sur 5 datasets :
+## Mise à jour continue
+`configs/runtime_sources.json` contrôle la fréquence. `civ_datagouv_catalog` est synchronisé quotidiennement. Les connecteurs utilisent état dlt + signatures/hash pour ne retélécharger que les changements.
 
+## Corpus
 ```bash
-python scripts/materialize_data_gouv_ci.py --output data_lake --limit 5
+ivoiredata corpus-build civ-0.1 TABLE1 TABLE2 --output corpora
 ```
+Les corpus sont immuables ; une mise à jour produit une nouvelle version.
 
-Un dataset précis :
-
-```bash
-python scripts/materialize_data_gouv_ci.py \
-  --output data_lake \
-  --dataset recensement-de-la-population-ivoirienne
-```
-
-Le résultat est produit dans :
-
-```text
-data_lake/
-├── catalog/data_gouv_ci.json
-├── metadata/data_gouv_ci/*.json
-├── raw/data_gouv_ci/*/full.csv
-├── processed/data_gouv_ci/jsonl/*.jsonl
-├── processed/data_gouv_ci/parquet/*.parquet
-└── manifests/
-```
-
-Voir `docs/DATAGOUV_ACCESS.md` pour les endpoints et le détail du pipeline.
-
-## GitHub Actions
-
-Le workflow **Materialize data.gouv.ci** est lançable manuellement depuis l'onglet **Actions**. Il télécharge les jeux accessibles, les normalise et publie `data_lake/` comme artifact GitHub temporaire. Cela donne un accès direct au corpus sans stocker des centaines de fichiers volumineux dans l'historique Git.
-
-## Autres pipelines
-
-Validation :
-
-```bash
-python scripts/validate_registry.py
-python scripts/validate_seed_facts.py
-pytest -q
-```
-
-Ingestion d'une page ou d'un PDF public :
-
-```bash
-python scripts/ingest_public_web.py --source-id civ_dgi https://www.dgi.gouv.ci/
-```
-
-Découverte/crawl public borné :
-
-```bash
-python scripts/discover_public_documents.py --source-id civ_dgi --max-pages 50 --include-pages https://www.dgi.gouv.ci/
-```
-
-## Collections
-
-- `CIV-Open` : datasets ouverts et redistribuables.
-- `CIV-Public-RAG` : documents/pages publics avec provenance, bruts conservés hors Git si nécessaire.
-- `CIV-Facts` : faits structurés, datés et sourcés.
-- `CIV-Microdata` : microdonnées à accès contrôlé.
-- `CIV-Eval` : benchmark futur, isolé de l'entraînement.
-
-## Stockage
-
-Git contient le code, les registres, manifests et petits jeux Gold. Les gros snapshots vivent dans `data_lake/`, GitHub Actions artifacts ou, à terme, S3/MinIO. Chaque export garde une URL source, une date de récupération et un SHA-256 pour être reproductible.
-
-## Licences
-
-Le code original du projet est Apache-2.0. Les sources externes conservent leurs propres droits et obligations. Voir `docs/RIGHTS_AND_ACCESS.md` et `docs/QUALITY_ASSURANCE.md`.
+Voir `docs/ENGINE.md`, `docs/DEPLOYMENT.md`, `docs/CORPUS.md`.

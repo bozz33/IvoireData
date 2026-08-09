@@ -1,0 +1,4 @@
+{
+  "defaults": {"connector":"auto","refresh_hours":168,"auto_sync":false,"options":{}},
+  "sources": {"civ_datagouv_catalog":{"connector":"data_gouv_ci","refresh_hours":24,"auto_sync":true}}
+}

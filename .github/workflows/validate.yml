@@ -7,8 +7,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python -m pip install -e '.[ingest,materialize,dev]'
+      - run: python -m pip install -e '.[dev]'
       - run: python scripts/validate_registry.py
-      - run: python scripts/build_public_queue.py
       - run: python scripts/validate_seed_facts.py
+      - run: python -m compileall -q src scripts
       - run: pytest -q
+      - run: ivoiredata --help
