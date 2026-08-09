@@ -3,12 +3,13 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from .delivery import inventory, source_paths
 from .engine import IvoireDataEngine
-from .query import query_sql
+from .query import query_source_sql
 from .ranking import rank_sources
 from .search import search_documents
 
-app = FastAPI(title="IvoireData Engine", version="0.5.0")
+app = FastAPI(title="IvoireData Engine", version="0.6.0")
 
 
 class SQLRequest(BaseModel):
@@ -19,7 +20,7 @@ class SQLRequest(BaseModel):
 @app.get("/health")
 def health():
     engine = IvoireDataEngine()
-    return {"status": "ok", "engine": "IvoireData", "version": "0.5.0", "storage": "local", "data_dir": str(engine.settings.data_dir)}
+    return {"status": "ok", "engine": "IvoireData", "version": "0.6.0", "storage": "local", "data_dir": str(engine.settings.data_dir)}
 
 
 @app.get("/sources")
@@ -34,13 +35,29 @@ def status(public_only: bool = True):
     engine = IvoireDataEngine(); rows = []
     for spec in engine.registry.list(public_only=public_only):
         state = engine.freshness.data.get(spec.source_id, {})
-        rows.append({"source_id": spec.source_id, "due": engine.freshness.due(spec), "refresh_hours": spec.refresh_hours, "auto_sync": spec.auto_sync, "last_success": state.get("last_success"), "last_status": state.get("last_status", "never")})
+        rows.append({"source_id": spec.source_id, "domain": spec.domain, "due": engine.freshness.due(spec), "refresh_hours": spec.refresh_hours, "auto_sync": spec.auto_sync, "last_success": state.get("last_success"), "last_status": state.get("last_status", "never")})
     return {"rows": rows}
 
 
 @app.get("/coverage")
 def coverage():
     return IvoireDataEngine().coverage()
+
+
+@app.get("/inventory")
+def data_inventory():
+    engine = IvoireDataEngine()
+    return inventory(engine.settings, engine.registry.list())
+
+
+@app.get("/sources/{source_id}/path")
+def source_path(source_id: str):
+    engine = IvoireDataEngine()
+    try:
+        spec = engine.registry.get(source_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {k: str(v) for k, v in source_paths(engine.settings, spec).items()}
 
 
 @app.post("/sync/{source_id}")
@@ -57,7 +74,7 @@ def document_search(q: str, limit: int = 20):
     except Exception as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.post("/query/sql")
-def sql(req: SQLRequest):
-    try: return {"rows": query_sql(req.sql, max_rows=min(req.max_rows, 5000))}
+@app.post("/query/source/{source_id}")
+def sql(source_id: str, req: SQLRequest):
+    try: return {"rows": query_source_sql(source_id, req.sql, max_rows=min(req.max_rows, 5000))}
     except Exception as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
