@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from ivoiredata.connectors.bulk_catalog import _Links, _table_name
+from ivoiredata.connectors.geoboundaries import _resolve_meta_urls
 from ivoiredata.connectors.public_web import _same_host_links
 from ivoiredata.models import SourceSpec
 from ivoiredata.settings import Settings
@@ -49,3 +50,27 @@ def test_local_settings_create_file_uri(tmp_path: Path):
 def test_runtime_connectors_are_declared():
     allowed = {"data_gouv_ci", "world_bank_wdi", "geoboundaries", "ilostat_ref_area", "osm_geofabrik", "bulk_catalog", "public_web", "http_file"}
     assert {"ilostat_ref_area", "osm_geofabrik", "bulk_catalog"} <= allowed
+
+
+def test_geoboundaries_directory_listing_explores_adm_levels():
+    # Un directory listing (dernier segment = code pays) doit générer une URL par niveau ADM.
+    urls = _resolve_meta_urls("https://www.geoboundaries.org/api/current/gbOpen/CIV/")
+    assert len(urls) == 6
+    assert urls[0] == "https://www.geoboundaries.org/api/current/gbOpen/CIV/ADM0/"
+    assert urls[-1] == "https://www.geoboundaries.org/api/current/gbOpen/CIV/ADM5/"
+
+
+def test_geoboundaries_direct_endpoint_is_kept_as_is():
+    # Un endpoint qui cible déjà un niveau ADM ne doit pas être démultiplié.
+    urls = _resolve_meta_urls("https://www.geoboundaries.org/api/current/gbOpen/CIV/ADM2/")
+    assert urls == ["https://www.geoboundaries.org/api/current/gbOpen/CIV/ADM2/"]
+
+
+def test_public_web_accepts_verify_ssl_option():
+    # Le connecteur public_web doit accepter l'option verify_ssl sans erreur,
+    # pour gérer les certificats gouvernementaux invalides.
+    import inspect
+    from ivoiredata.connectors import public_web
+    sig = inspect.signature(public_web.public_document_resource)
+    assert "verify_ssl" in sig.parameters
+    assert sig.parameters["verify_ssl"].default is True

@@ -120,6 +120,7 @@ def public_document_resource(
     max_bytes: int = 20_000_000,
     metadata_only: bool = False,
     snapshot_dir: Path | None = None,
+    verify_ssl: bool = True,
 ):
     import dlt
     import requests
@@ -132,6 +133,16 @@ def public_document_resource(
     def resource():
         state = dlt.current.resource_state().setdefault("content_hashes", {})
         session = requests.Session()
+        if not verify_ssl:
+            # Certificat gouvernemental invalide (hostname mismatch) : on collecte malgré tout
+            # les données publiques, mais on le signale pour traçabilité.
+            session.verify = False
+            try:
+                import urllib3
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            except Exception:
+                pass
+            print(f"[public_web] {source_id}: TLS désactivé (certificat serveur invalide)", flush=True)
         queue = deque([url])
         seen: set[str] = set()
         robots_cache: dict[str, RobotFileParser | None] = {}
@@ -148,8 +159,17 @@ def public_document_resource(
                     continue
             if not _robots_allowed(session, current, user_agent, robots_cache):
                 continue
-            response = session.get(current, timeout=120, headers={"User-Agent": user_agent})
-            response.raise_for_status()
+            try:
+                response = session.get(current, timeout=120, headers={"User-Agent": user_agent})
+                response.raise_for_status()
+            except requests.exceptions.RequestException as exc:
+                # Un lien crawlé peut être mort (404), redirigé hors-hôte, ou lever une erreur SSL
+                # côté serveur. On ne doit pas faire tomber toute la source : on journalise et on
+                # passe au lien suivant. Seule la page racine (url initiale) est critique.
+                if current == url:
+                    raise
+                print(f"[public_web] {source_id}: lien ignoré {current} -> {exc}", flush=True)
+                continue
             fetched += 1
             raw = response.content
             if len(raw) > max_bytes:

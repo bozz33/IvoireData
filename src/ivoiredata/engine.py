@@ -47,7 +47,7 @@ class IvoireDataEngine:
         if spec.connector == "bulk_catalog":
             return bulk_catalog_resource(source_id=spec.source_id, page_url=spec.source_url, user_agent=self.settings.user_agent, download_dir=p["raw"], download_patterns=list(o.get("download_patterns", [])), max_downloads=int(o.get("max_downloads", 0)), max_bytes=int(o.get("max_bytes", 250_000_000)))
         if spec.connector == "public_web":
-            return public_document_resource(source_id=spec.source_id, url=spec.source_url, force=force, user_agent=self.settings.user_agent, crawl=bool(o.get("crawl", False)), max_pages=int(o.get("max_pages", 1)), max_bytes=int(o.get("max_bytes", 20_000_000)), metadata_only=bool(o.get("metadata_only", False)), snapshot_dir=p["documents"])
+            return public_document_resource(source_id=spec.source_id, url=spec.source_url, force=force, user_agent=self.settings.user_agent, crawl=bool(o.get("crawl", False)), max_pages=int(o.get("max_pages", 1)), max_bytes=int(o.get("max_bytes", 20_000_000)), metadata_only=bool(o.get("metadata_only", False)), snapshot_dir=p["documents"], verify_ssl=bool(o.get("verify_ssl", True)))
         raise ValueError(f"unsupported connector {spec.connector!r} for {spec.source_id}")
 
     def _catalog(self) -> None:

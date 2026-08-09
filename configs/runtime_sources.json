@@ -26,7 +26,7 @@
     "civ_health_e_depps": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
     "civ_artci": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
     "civ_customs": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
-    "civ_treasury_debt": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
+    "civ_treasury_debt": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 40, "verify_ssl": false}},
     "civ_pnd_2026_2030": {"connector": "public_web", "refresh_hours": 720, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
     "civ_apif": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 25}},
     "civ_dgmp": {"connector": "public_web", "refresh_hours": 24, "auto_sync": true, "options": {"crawl": true, "max_pages": 50}},
