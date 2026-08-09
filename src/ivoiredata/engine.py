@@ -59,7 +59,8 @@ class IvoireDataEngine:
             raise PermissionError(f"{source_id} is not configured for unattended public ingestion")
         started = _now()
         try:
-            details = str(get_source_pipeline(self.settings, spec).run(self._resource_for(spec, force=force)))
+            pipeline = get_source_pipeline(self.settings, spec)
+            details = str(pipeline.run(self._resource_for(spec, force=force), loader_file_format="parquet"))
             finished = _now()
             self.freshness.mark(source_id, success=True, details=details)
             write_source_manifest(self.settings, spec, status="success", connector=spec.connector, started_at=started, finished_at=finished, details=details)
