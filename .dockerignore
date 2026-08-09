@@ -1,0 +1,30 @@
+# Données locales — jamais dans l'image, elles vivent dans les volumes.
+data_lake/
+.ivoiredata/
+.dlt/
+corpora/
+tokenizer/
+cache/
+
+# Données d'exemple du dépôt (inutiles au runtime).
+data/raw/*
+data/processed/*
+data/quarantine/*
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Git / CI / éditeurs
+.git/
+.github/
+.gitignore
+*.md.tmp
+
+# Env locaux (seuls les valeurs par défaut de .env.example peuvent servir d'exemple)
+.env
+.env.*
+!.env.example

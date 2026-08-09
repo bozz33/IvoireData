@@ -1,24 +1,106 @@
+# IvoireData — déploiement local de production.
+#
+# Toutes les données restent sur la machine hôte (rien en S3/Postgres).
+# Quatre volumes persistants survivent aux recreates :
+#   data_lake/   tables dlt + raw_external + manifests + catalog.json
+#   .ivoiredata/ fraîcheur / checkpoints
+#   corpora/     corpus versionnés (IvoireCorpus)
+#   tokenizer/   tokenizer entraîné localement
+#
+# Services:
+#   api        -> API FastAPI :8000 (démarrée par défaut)
+#   scheduler  -> ivoiredata scheduler --interval (synchro périodique, profil "run")
+#   sync-once  -> ivoiredata scheduler --once puis arrêt (première synchro, profil "sync")
+#
+# Usage:
+#   docker compose up -d --build                 # API seule
+#   docker compose --profile run up -d --build   # API + scheduler permanent
+#   docker compose --profile sync run sync-once  # une passe complète de synchro
+#   docker compose logs -f scheduler
+
+x-engine-env: &engine-env
+  IVOIREDATA_DATA_DIR: /app/data_lake
+  IVOIREDATA_STATE_DIR: /app/.ivoiredata/state
+  IVOIREDATA_DATASET_NAME: ${IVOIREDATA_DATASET_NAME:-ivoiredata}
+  IVOIREDATA_PIPELINE_NAME: ${IVOIREDATA_PIPELINE_NAME:-ivoiredata_engine}
+  IVOIREDATA_SCHEDULER_INTERVAL: ${IVOIREDATA_SCHEDULER_INTERVAL:-3600}
+
+x-engine-volumes: &engine-volumes
+  - ./data_lake:/app/data_lake
+  - ./.ivoiredata:/app/.ivoiredata
+  - ./corpora:/app/corpora
+  - ./tokenizer:/app/tokenizer
+
 services:
+  # Prépare les volumes persistants (chown vers PUID/PGID) avant les autres services.
+  # Tourne une fois en root, puis s'arrête. Indispensable car Docker crée les bind-mounts
+  # en root et le container applicatif tourne en non-root.
+  init-volumes:
+    image: alpine:3.20
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /data/data_lake /data/.ivoiredata/state /data/corpora /data/tokenizer
+        chown -R ${PUID:-1000}:${PGID:-1000} /data/data_lake /data/.ivoiredata /data/corpora /data/tokenizer
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+    volumes: *engine-volumes
+
   api:
-    build: .
-    environment: &engine_env
-      IVOIREDATA_DATA_DIR: /app/data_lake
-      IVOIREDATA_STATE_DIR: /app/.ivoiredata/state
-    volumes:
-      - ./data_lake:/app/data_lake
-      - ./.ivoiredata:/app/.ivoiredata
-      - ./corpora:/app/corpora
-      - ./tokenizer:/app/tokenizer
+    build:
+      context: .
+      args:
+        PUID: ${PUID:-1000}
+        PGID: ${PGID:-1000}
+    image: ivoiredata:0.5.0
+    restart: unless-stopped
+    environment: *engine-env
+    volumes: *engine-volumes
     ports:
-      - "8000:8000"
+      - "${IVOIREDATA_API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
 
   scheduler:
-    build: .
-    command: ["ivoiredata", "scheduler", "--interval", "3600"]
-    environment:
-      <<: *engine_env
-    volumes:
-      - ./data_lake:/app/data_lake
-      - ./.ivoiredata:/app/.ivoiredata
-      - ./corpora:/app/corpora
-      - ./tokenizer:/app/tokenizer
+    build:
+      context: .
+      args:
+        PUID: ${PUID:-1000}
+        PGID: ${PGID:-1000}
+    image: ivoiredata:0.5.0
+    restart: unless-stopped
+    profiles: ["run"]
+    command: ["ivoiredata", "scheduler", "--interval", "${IVOIREDATA_SCHEDULER_INTERVAL:-3600}"]
+    environment: *engine-env
+    volumes: *engine-volumes
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+
+  # Passe unique : synchronise toutes les sources dues, puis s'arrête.
+  # Utilisée pour la première synchro complète et pour les passes de validation.
+  sync-once:
+    build:
+      context: .
+      args:
+        PUID: ${PUID:-1000}
+        PGID: ${PGID:-1000}
+    image: ivoiredata:0.5.0
+    profiles: ["sync"]
+    command: ["ivoiredata", "scheduler", "--once"]
+    environment: *engine-env
+    volumes: *engine-volumes
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
