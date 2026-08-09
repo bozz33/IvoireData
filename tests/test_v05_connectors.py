@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ivoiredata.connectors.bulk_catalog import _Links
+from ivoiredata.connectors.bulk_catalog import _Links, _table_name
 from ivoiredata.connectors.public_web import _same_host_links
 from ivoiredata.models import SourceSpec
 from ivoiredata.settings import Settings
@@ -32,10 +32,12 @@ def test_metadata_only_filters_microdata_download_links():
     assert all("other.example" not in link for link in result)
 
 
-def test_bulk_link_parser():
+def test_bulk_link_parser_and_table_isolation():
     parser = _Links()
     parser.feed('<a href="file.csv">CSV data</a><a href="/doc">Documentation</a>')
     assert parser.links == [("file.csv", "CSV data"), ("/doc", "Documentation")]
+    assert _table_name("civ_faostat") == "bulk_catalog_civ_faostat"
+    assert _table_name("civ_uis") == "bulk_catalog_civ_uis"
 
 
 def test_local_settings_create_file_uri(tmp_path: Path):
