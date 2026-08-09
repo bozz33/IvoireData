@@ -51,6 +51,18 @@ Un catalogue FAOSTAT/UIS est une vraie donnée utile pour découvrir les fichier
 
 La transition vers `FULL_STRUCTURED` se fait après validation d'un connecteur/API ou sélection de fichiers bulk pertinents.
 
+### État constaté au premier full sync (v0.5.0)
+
+| Source | Niveau annoncé | État réel constaté | Action requise |
+|--------|----------------|--------------------|----------------|
+| `civ_faostat` | CATALOG_ONLY | La page `source_url` est une SPA JS qui ne liste pas les fichiers bulk → le connecteur `bulk_catalog` ne découvre aucun lien, donc la table d'inventaire elle-même est vide. Marquée `success` à tort. | Connecteur spécialisé : `source_url` doit pointer vers `https://bulks-faostat.fao.org/` ou utiliser l'API pays (area=38). Roadmap point 2. |
+| `civ_uis` | CATALOG_ONLY | Idem : le bulk UIS réel et l'API SDMX (`api.on.unesco.org`) ne répondent pas. Inventaire vide. | Connecteur spécialisé à construire. Roadmap point 2. |
+| `civ_ilostat` | FULL_STRUCTURED | Le `.rds` CIV est téléchargé (snapshot conservé) mais `pyreadr`/`librdata` segfault au parsing. Isolé en subprocess → erreur gérable. | Re-parser via `rdata` (pure Python) ou un connecteur alternatif. |
+
+Tant que ces sources restent vides, une synchro marquée `success` ne garantit pas qu'il y a des
+données exploitables. Toujours vérifier l'inventaire du manifest (`inventory.tables.files`) et le
+nombre de lignes Parquet avant de considérer une source comme réellement couverte.
+
 ## Vérification runtime
 
 ```bash
