@@ -1,31 +1,63 @@
-# Couverture multisectorielle — v0.2.0
+# Couverture multisectorielle — v0.5.0
 
-Les langues sont volontairement hors périmètre actif de cette phase.
+Les langues restent volontairement hors périmètre actif. La couverture ci-dessous décrit **le niveau technique réellement implémenté**, pas seulement les sources connues.
 
-| Secteur | Sources prioritaires | Traitement |
+## Niveaux
+
+- **Structuré** : connecteur dédié, données transformées en tables ou snapshot local vérifiable.
+- **Bulk catalog** : catalogue officiel suivi automatiquement, gros fichiers téléchargés seulement sur sélection.
+- **Web public** : crawl/documentation/PDF avec hash et provenance.
+- **Metadata only** : catalogue public synchronisé mais microdonnées contrôlées exclues.
+- **Manuel/contrôlé** : source référencée mais aucune ingestion automatique du payload.
+
+| Secteur | Sources prioritaires | Niveau v0.5 |
 |---|---|---|
-| Open data national | data.gouv.ci | catalogue complet + téléchargements/API sous Licence Ouverte |
-| Statistiques | ANStat / NADA | métadonnées + microdonnées selon le niveau d’accès |
-| Fiscalité / FNE | DGI | pages/PDF publics → texte, faits et RAG avec provenance |
-| Droit / Justice | OHADA, Ministère de la Justice | textes, procédures, rapports et statistiques publics |
-| Administration | servicepublic.gouv.ci | démarches, pièces, coûts et délais quand publiés |
-| Budget / dette | Budget, Trésor | bulletins, lois/rapports et tableaux publics |
-| Marchés publics | DGMP / SIGOMAP | plans, appels d’offres, résultats, statistiques publics |
-| Douanes / commerce | Douanes ivoiriennes | Excel/PDF publics, statistiques 1999–2025 |
-| Finance | BCEAO / APIF | séries macro-financières et inclusion financière |
-| Agriculture | data.gouv.ci, ANStat EAA, FAOSTAT | productions, prix, cheptel, commerce, recensements |
-| Santé | RASS, E-DEPPS, WHO | rapports, établissements et indicateurs agrégés |
-| Éducation | MENA, UNESCO UIS | annuaires, programmes, examens et indicateurs |
-| Télécoms | ARTCI | abonnements, Internet, mobile money, revenus et rapports |
-| Mines / pétrole / énergie | MMPE, MNV Énergie | production, ressources, GES, investissements |
-| Environnement / climat | MINETE/SIE, World Bank Climate | rapports, CDN, indicateurs, climat |
-| Transport | Ministère des Transports | aérien, portuaire, routier, ferroviaire |
-| Foncier / logement | MULCV, IDUFCI public | procédures et référentiels publics; aucun contournement d’accès parcellaire |
-| Eau / assainissement | ONEP, ONAD | rapports, infrastructures, politiques et procédures |
-| Météo | SODEXAM | stations, bulletins et données publiquement accessibles |
-| Géographie | OSM/Geofabrik, geoBoundaries | données géographiques ouvertes selon leurs licences |
-| Développement | World Bank, FAOSTAT, ILOSTAT | APIs et séries filtrées pour CIV |
+| Open data national | data.gouv.ci | **Structuré** : Data Fair catalogue + datasets |
+| Statistiques nationales | ANStat / NADA | **Metadata only** pour le catalogue ; microdonnées contrôlées manuelles |
+| Fiscalité / FNE | DGI | **Web public** automatique |
+| Droit / Justice | OHADA, Ministère Justice | **Web public** automatique |
+| Administration | Service Public | **Web public** automatique |
+| Dette publique | Trésor | **Web public** automatique |
+| Marchés publics | DGMP | **Web public** automatique |
+| Douanes / commerce | Douanes | **Web public** automatique |
+| Finance | BCEAO / APIF | **Web public** automatique |
+| Agriculture nationale | data.gouv.ci, Ministère Agriculture | structuré + web public |
+| Agriculture internationale | FAOSTAT | **Bulk catalog** automatique ; payloads volumineux sur sélection |
+| Travail / emploi | ILOSTAT | **Structuré** pour CIV, fréquence annuelle par défaut |
+| Santé nationale | RASS, E-DEPPS | **Web public** automatique |
+| Santé internationale | WHO | **Web public** pendant la transition de l’API WHO |
+| Éducation nationale | MENA | **Web public** automatique |
+| Éducation internationale | UNESCO UIS | **Bulk catalog** automatique |
+| Télécoms | ARTCI | **Web public** automatique |
+| Mines / pétrole / énergie | MMPE, MNV | **Web public** automatique |
+| Environnement | Ministère / SIE | **Web public** automatique |
+| Climat international | World Bank Climate | **Web public** ; connecteur spécialisé à développer si besoin analytique |
+| Transport | Ministère Transports | **Web public** automatique |
+| Foncier / logement | IDUFCI / Construction | **Web public** automatique |
+| Eau / assainissement | ONEP / ONAD | **Web public** automatique |
+| Météo | SODEXAM | **Web public** automatique |
+| Géographie administrative | geoBoundaries | **Structuré** GeoJSON |
+| Géographie OSM | Geofabrik | **Structuré snapshot** PBF local + checksums |
+| Développement macro | World Bank WDI | **Structuré** API v2 CIV |
+| Projets World Bank | World Bank Projects | **Web public** actuellement |
 
-## Sources publiques sans licence ouverte explicite
+## Ce qui est prêt pour l’auto-update local
 
-Elles sont utilisables dans le pipeline **local** : téléchargement lorsqu’elles sont directement accessibles, calcul du SHA-256, extraction du texte/tableau, découpage RAG et extraction de faits. Le dépôt public ne republie pas automatiquement le document intégral lorsqu’un droit de redistribution n’a pas été établi. Les authentifications, CAPTCHAs, paywalls ou contrôles par rôle ne sont jamais contournés.
+Les sources configurées avec `auto_sync=true` sont contrôlées par `configs/runtime_sources.json`. La commande :
+
+```bash
+ivoiredata coverage
+```
+
+fournit le nombre actuel de sources auto, leur répartition par connecteur et domaine.
+
+## Ce qui reste volontairement non automatique
+
+- microdonnées ANStat nécessitant une acceptation/autorisation ;
+- datasets classés `D_*` ;
+- fichiers pour lesquels la redistribution ou l’accès n’est pas suffisamment clair ;
+- téléchargements bulk potentiellement massifs tant qu’aucun motif n’est explicitement configuré.
+
+## Principe de vérité
+
+Une source n’est pas considérée « couverte » simplement parce que son URL est dans le registre. La couverture devient réelle lorsqu’un connecteur est configuré, testé et capable de conserver provenance + fraîcheur + résultat local.
