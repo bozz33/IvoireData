@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -54,6 +53,82 @@ def _dir_stats(path: Path) -> dict[str, int]:
     return {"files": files, "bytes": bytes_total}
 
 
+def _parquet_stats(path: Path) -> dict[str, int]:
+    """Read Parquet metadata only; never scan full table contents."""
+    files = 0
+    bytes_total = 0
+    rows = 0
+    if not path.exists():
+        return {"files": 0, "bytes": 0, "rows": 0}
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        base = _dir_stats(path)
+        return {**base, "rows": 0}
+    for item in path.rglob("*.parquet"):
+        if any(part.startswith("_dlt") for part in item.parts):
+            continue
+        files += 1
+        try:
+            bytes_total += item.stat().st_size
+            rows += int(pq.ParquetFile(item).metadata.num_rows)
+        except (OSError, ValueError, TypeError):
+            continue
+    return {"files": files, "bytes": bytes_total, "rows": rows}
+
+
+def _transport_security(spec: SourceSpec) -> str:
+    if spec.source_url.lower().startswith("http://"):
+        return "HTTP"
+    if spec.connector == "public_web" and spec.options.get("verify_ssl") is False:
+        return "DEGRADED_TLS"
+    return "VERIFIED_TLS"
+
+
+def compute_delivery_status(
+    spec: SourceSpec,
+    *,
+    sync_status: str,
+    inventory: dict[str, dict[str, int]],
+) -> tuple[str, list[str]]:
+    tables = inventory["tables"]
+    raw = inventory["raw"]
+    documents = inventory["documents"]
+    rows = int(tables.get("rows", 0))
+    warnings: list[str] = []
+
+    if spec.options.get("metadata_only"):
+        delivery = "METADATA_ONLY" if (rows or documents["files"] or raw["files"]) else "EMPTY"
+        if delivery != "EMPTY":
+            warnings.append("METADATA_ONLY_SOURCE")
+    elif rows > 0:
+        delivery = "FULL_STRUCTURED"
+    elif documents["files"] > 0:
+        delivery = "DOCUMENTS_ONLY"
+    elif raw["files"] > 0:
+        delivery = "SNAPSHOT_ONLY"
+    else:
+        delivery = "EMPTY"
+
+    if sync_status == "success" and delivery == "EMPTY":
+        warnings.append("EMPTY_AFTER_SUCCESS")
+    if sync_status == "error" and delivery != "EMPTY":
+        warnings.append("SYNC_ERROR_WITH_STALE_DATA")
+    if _transport_security(spec) == "DEGRADED_TLS":
+        warnings.append("TLS_VERIFICATION_DISABLED")
+    return delivery, warnings
+
+
+def _freshness_status(sync_status: str, freshness_state: dict[str, Any] | None, *, due: bool) -> str:
+    state = freshness_state or {}
+    last_success = state.get("last_success")
+    if sync_status == "error":
+        return "STALE" if last_success else "NEVER_SYNCED"
+    if not last_success:
+        return "NEVER_SYNCED"
+    return "DUE" if due else "FRESH"
+
+
 def write_source_manifest(
     settings: Settings,
     spec: SourceSpec,
@@ -63,10 +138,22 @@ def write_source_manifest(
     started_at: str,
     finished_at: str,
     details: str = "",
+    freshness_state: dict[str, Any] | None = None,
+    due: bool = False,
 ) -> dict[str, Any]:
     paths = ensure_source_layout(settings, spec)
+    inv = {
+        "tables": _parquet_stats(paths["tables"]),
+        "raw": _dir_stats(paths["raw"]),
+        "documents": _dir_stats(paths["documents"]),
+    }
+    delivery_status, warnings = compute_delivery_status(spec, sync_status=status, inventory=inv)
+    freshness_status = _freshness_status(status, freshness_state, due=due)
+    transport_security = _transport_security(spec)
+    state = freshness_state or {}
+
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source_id": spec.source_id,
         "title": spec.title,
         "domain": spec.domain,
@@ -79,19 +166,49 @@ def write_source_manifest(
         "auto_sync": spec.auto_sync,
         "refresh_hours": spec.refresh_hours,
         "status": status,
+        "delivery_status": delivery_status,
+        "freshness_status": freshness_status,
+        "transport_security": transport_security,
         "started_at": started_at,
         "finished_at": finished_at,
         "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "sync": {
+            "status": status.upper(),
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "last_attempt": state.get("last_attempt"),
+            "last_success": state.get("last_success"),
+        },
+        "delivery": {
+            "status": delivery_status,
+            "rows": int(inv["tables"].get("rows", 0)),
+            "table_files": int(inv["tables"].get("files", 0)),
+            "table_bytes": int(inv["tables"].get("bytes", 0)),
+            "raw_files": int(inv["raw"].get("files", 0)),
+            "raw_bytes": int(inv["raw"].get("bytes", 0)),
+            "document_files": int(inv["documents"].get("files", 0)),
+            "document_bytes": int(inv["documents"].get("bytes", 0)),
+        },
+        "freshness": {
+            "status": freshness_status,
+            "refresh_hours": spec.refresh_hours,
+            "due": bool(due),
+            "last_success": state.get("last_success"),
+        },
+        "transport": {
+            "security": transport_security,
+        },
+        "rights": {
+            "tier": spec.rights_tier,
+            "access": spec.access_tier,
+        },
+        "warnings": warnings,
         "paths": {
             "tables": "tables/",
             "raw": "raw/",
             "documents": "documents/",
         },
-        "inventory": {
-            "tables": _dir_stats(paths["tables"]),
-            "raw": _dir_stats(paths["raw"]),
-            "documents": _dir_stats(paths["documents"]),
-        },
+        "inventory": inv,
         "details": details[-4000:],
     }
     paths["manifest"].write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -117,13 +234,15 @@ def rebuild_catalog(settings: Settings, specs: list[SourceSpec]) -> dict[str, An
                 "provider": spec.provider,
                 "source_url": spec.source_url,
                 "status": "not_synced",
+                "delivery_status": "EMPTY",
+                "freshness_status": "NEVER_SYNCED",
                 "auto_sync": spec.auto_sync,
                 "refresh_hours": spec.refresh_hours,
             }
         sources.append(item)
         domains.setdefault(spec.domain, []).append(item)
     catalog = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "storage": "local",
         "root": str(settings.data_dir),

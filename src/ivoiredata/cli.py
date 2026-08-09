@@ -16,11 +16,30 @@ def parser():
     s = sub.add_parser("status"); s.add_argument("--public", action="store_true")
     sub.add_parser("coverage")
     sub.add_parser("inventory")
+    s = sub.add_parser("audit"); s.add_argument("--all", action="store_true", help="include controlled/manual sources")
     s = sub.add_parser("source-path"); s.add_argument("source_id")
     s = sub.add_parser("sync"); s.add_argument("source_id", nargs="?"); s.add_argument("--due", action="store_true"); s.add_argument("--all-public", action="store_true"); s.add_argument("--force", action="store_true")
     s = sub.add_parser("scheduler"); s.add_argument("--interval", type=int, default=3600); s.add_argument("--once", action="store_true")
     s = sub.add_parser("query"); s.add_argument("source_id"); s.add_argument("sql"); s.add_argument("--max-rows", type=int, default=1000)
     return p
+
+
+def _manifest_summary(engine: IvoireDataEngine, spec) -> dict:
+    path = source_paths(engine.settings, spec)["manifest"]
+    if not path.exists():
+        return {}
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    delivery = manifest.get("delivery", {})
+    return {
+        "delivery_status": manifest.get("delivery_status") or delivery.get("status"),
+        "freshness_status": manifest.get("freshness_status") or manifest.get("freshness", {}).get("status"),
+        "transport_security": manifest.get("transport_security") or manifest.get("transport", {}).get("security"),
+        "rows": delivery.get("rows", manifest.get("inventory", {}).get("tables", {}).get("rows", 0)),
+        "warnings": manifest.get("warnings", []),
+    }
 
 
 def main(argv=None) -> int:
@@ -33,12 +52,25 @@ def main(argv=None) -> int:
     if args.command == "status":
         for spec in engine.registry.list(public_only=args.public):
             state = engine.freshness.data.get(spec.source_id, {})
-            print(json.dumps({"source_id": spec.source_id, "domain": spec.domain, "connector": spec.connector, "refresh_hours": spec.refresh_hours, "auto_sync": spec.auto_sync, "due": engine.freshness.due(spec), "last_success": state.get("last_success"), "last_status": state.get("last_status", "never")}, ensure_ascii=False))
+            row = {
+                "source_id": spec.source_id,
+                "domain": spec.domain,
+                "connector": spec.connector,
+                "refresh_hours": spec.refresh_hours,
+                "auto_sync": spec.auto_sync,
+                "due": engine.freshness.due(spec),
+                "last_success": state.get("last_success"),
+                "last_status": state.get("last_status", "never"),
+            }
+            row.update(_manifest_summary(engine, spec))
+            print(json.dumps(row, ensure_ascii=False))
         return 0
     if args.command == "coverage":
         print(json.dumps(engine.coverage(), ensure_ascii=False, indent=2)); return 0
     if args.command == "inventory":
         print(json.dumps(inventory(engine.settings, engine.registry.list()), ensure_ascii=False, indent=2)); return 0
+    if args.command == "audit":
+        print(json.dumps(engine.audit(public_only=not args.all), ensure_ascii=False, indent=2)); return 0
     if args.command == "source-path":
         spec = engine.registry.get(args.source_id)
         print(json.dumps({k: str(v) for k, v in source_paths(engine.settings, spec).items()}, ensure_ascii=False, indent=2)); return 0

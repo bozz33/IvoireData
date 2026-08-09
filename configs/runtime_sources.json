@@ -6,43 +6,348 @@
     "options": {}
   },
   "sources": {
-    "civ_datagouv_catalog": {"connector": "data_gouv_ci", "refresh_hours": 24, "auto_sync": true},
-    "civ_anstat_nada": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"metadata_only": true, "crawl": true, "max_pages": 80, "verify_ssl": false}},
-    "civ_osm_geofabrik": {"connector": "osm_geofabrik", "refresh_hours": 24, "auto_sync": true, "options": {"format": "pbf"}},
-    "civ_geoboundaries": {"connector": "geoboundaries", "refresh_hours": 720, "auto_sync": true},
-    "civ_worldbank_wdi": {"connector": "world_bank_wdi", "refresh_hours": 168, "auto_sync": true, "options": {"country": "CIV", "source": 2, "batch_size": 60}},
-    "civ_worldbank_projects": {"connector": "world_bank_projects", "refresh_hours": 168, "auto_sync": true, "options": {"country_code": "CI", "page_size": 50}},
-    "civ_worldbank_climate": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 20}},
-    "civ_faostat": {"connector": "bulk_catalog", "refresh_hours": 168, "auto_sync": true, "options": {"max_downloads": 0}},
-    "civ_ilostat": {"connector": "ilostat_ref_area", "refresh_hours": 168, "auto_sync": true, "options": {"country": "CIV", "frequencies": ["A"], "base_url": "https://rplumber.ilo.org/data/indicator"}},
-    "civ_uis": {"connector": "bulk_catalog", "refresh_hours": 720, "auto_sync": true, "options": {"max_downloads": 0}},
-    "civ_who_profile": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 20}},
-    "civ_bceao_bdef": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 25}},
-    "civ_dgi": {"connector": "public_web", "refresh_hours": 24, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
-    "civ_ohada": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
-    "civ_agriculture_ministry": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
-    "civ_mena": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
-    "civ_health_rass": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
-    "civ_health_e_depps": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
-    "civ_artci": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
-    "civ_customs": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
-    "civ_treasury_debt": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 40, "verify_ssl": false}},
-    "civ_pnd_2026_2030": {"connector": "public_web", "refresh_hours": 720, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
-    "civ_apif": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 25}},
-    "civ_dgmp": {"connector": "public_web", "refresh_hours": 24, "auto_sync": true, "options": {"crawl": true, "max_pages": 50}},
-    "civ_servicepublic": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 50}},
-    "civ_cnps": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
-    "civ_justice": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
-    "civ_transport": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
-    "civ_environment": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
-    "civ_environment_sie": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
-    "civ_mining": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
-    "civ_hydrocarbon": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
-    "civ_mnv_energy": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
-    "civ_idufci": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
-    "civ_construction_services": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
-    "civ_onep": {"connector": "public_web", "refresh_hours": 720, "auto_sync": true, "options": {"crawl": true, "max_pages": 20}},
-    "civ_onad": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
-    "civ_sodexam": {"connector": "public_web", "refresh_hours": 24, "auto_sync": true, "options": {"crawl": true, "max_pages": 25}}
+    "civ_datagouv_catalog": {
+      "connector": "data_gouv_ci",
+      "refresh_hours": 24,
+      "auto_sync": true
+    },
+    "civ_anstat_nada": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "metadata_only": true,
+        "crawl": true,
+        "max_pages": 80,
+        "verify_ssl": false
+      }
+    },
+    "civ_osm_geofabrik": {
+      "connector": "osm_geofabrik",
+      "refresh_hours": 24,
+      "auto_sync": true,
+      "options": {
+        "format": "pbf"
+      }
+    },
+    "civ_geoboundaries": {
+      "connector": "geoboundaries",
+      "refresh_hours": 720,
+      "auto_sync": true
+    },
+    "civ_worldbank_wdi": {
+      "connector": "world_bank_wdi",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "country": "CIV",
+        "source": 2,
+        "batch_size": 60
+      }
+    },
+    "civ_worldbank_projects": {
+      "connector": "world_bank_projects",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "country_code": "CI",
+        "page_size": 50
+      }
+    },
+    "civ_worldbank_climate": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 20
+      }
+    },
+    "civ_faostat": {
+      "connector": "faostat_country",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "country": "CIV",
+        "aliases": [
+          "Côte d'Ivoire",
+          "Cote d'Ivoire",
+          "Côte d’Ivoire",
+          "Ivory Coast"
+        ],
+        "max_bytes_per_file": 400000000
+      }
+    },
+    "civ_ilostat": {
+      "connector": "ilostat_ref_area",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "country": "CIV",
+        "base_url": "https://rplumber.ilo.org/data/indicator"
+      }
+    },
+    "civ_uis": {
+      "connector": "uis_country",
+      "refresh_hours": 720,
+      "auto_sync": true,
+      "options": {
+        "geo_unit": "CIV",
+        "start_year": 1970
+      }
+    },
+    "civ_who_profile": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 20
+      }
+    },
+    "civ_bceao_bdef": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 25
+      }
+    },
+    "civ_dgi": {
+      "connector": "public_web",
+      "refresh_hours": 24,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 40
+      }
+    },
+    "civ_ohada": {
+      "connector": "public_web",
+      "refresh_hours": 72,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 40
+      }
+    },
+    "civ_agriculture_ministry": {
+      "connector": "public_web",
+      "refresh_hours": 72,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 40
+      }
+    },
+    "civ_mena": {
+      "connector": "public_web",
+      "refresh_hours": 72,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 40
+      }
+    },
+    "civ_health_rass": {
+      "connector": "public_web",
+      "refresh_hours": 72,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 40
+      }
+    },
+    "civ_health_e_depps": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 30
+      }
+    },
+    "civ_artci": {
+      "connector": "public_web",
+      "refresh_hours": 72,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 40
+      }
+    },
+    "civ_customs": {
+      "connector": "public_web",
+      "refresh_hours": 72,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 40
+      }
+    },
+    "civ_treasury_debt": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 40,
+        "verify_ssl": false
+      }
+    },
+    "civ_pnd_2026_2030": {
+      "connector": "public_web",
+      "refresh_hours": 720,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 30
+      }
+    },
+    "civ_apif": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 25
+      }
+    },
+    "civ_dgmp": {
+      "connector": "public_web",
+      "refresh_hours": 24,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 50
+      }
+    },
+    "civ_servicepublic": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 50
+      }
+    },
+    "civ_cnps": {
+      "connector": "public_web",
+      "refresh_hours": 72,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 40
+      }
+    },
+    "civ_justice": {
+      "connector": "public_web",
+      "refresh_hours": 72,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 40
+      }
+    },
+    "civ_transport": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 40
+      }
+    },
+    "civ_environment": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 40
+      }
+    },
+    "civ_environment_sie": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 30
+      }
+    },
+    "civ_mining": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 30
+      }
+    },
+    "civ_hydrocarbon": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 30
+      }
+    },
+    "civ_mnv_energy": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 30
+      }
+    },
+    "civ_idufci": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 30
+      }
+    },
+    "civ_construction_services": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 30
+      }
+    },
+    "civ_onep": {
+      "connector": "public_web",
+      "refresh_hours": 720,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 20
+      }
+    },
+    "civ_onad": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 30
+      }
+    },
+    "civ_sodexam": {
+      "connector": "public_web",
+      "refresh_hours": 24,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 25
+      }
+    }
   }
 }

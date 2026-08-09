@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ivoiredata"
-version = "0.6.0"
+version = "0.7.0"
 description = "Local-first Côte d'Ivoire source collection and domain-organized data delivery engine built on dlt"
 requires-python = ">=3.10"
 dependencies = [
@@ -16,8 +16,7 @@ dependencies = [
   "pandas>=2.2",
   "pyarrow>=17.0",
   "openpyxl>=3.1",
-  "xlrd>=2.0",
-  "pyreadr>=0.5"
+  "xlrd>=2.0"
 ]
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

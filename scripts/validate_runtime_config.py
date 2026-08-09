@@ -11,6 +11,7 @@ from ivoiredata.registry import SourceRegistry
 ALLOWED_CONNECTORS = {
     "data_gouv_ci", "http_file", "public_web", "world_bank_wdi", "world_bank_projects",
     "geoboundaries", "ilostat_ref_area", "osm_geofabrik", "bulk_catalog",
+    "faostat_country", "uis_country",
 }
 
 registry_path = Path("registry/sources.csv")
