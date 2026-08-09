@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from ivoiredata.connectors.bulk_catalog import _Links, _table_name
+from ivoiredata.connectors.data_gouv_ci import dataset_id_from_public_url
 from ivoiredata.connectors.geoboundaries import _resolve_meta_urls
 from ivoiredata.connectors.public_web import _same_host_links
 from ivoiredata.models import SourceSpec
@@ -136,3 +137,35 @@ def test_ilostat_rds_parse_is_isolated_in_subprocess():
             assert "segfaulted" in str(exc)
     finally:
         subprocess.run = orig
+
+
+def test_datagouv_dataset_id_extracted_from_slug_url():
+    # L'URL d'un dataset ciblé (slug lisible) doit produire l'identifiant attendu.
+    slug = dataset_id_from_public_url("https://data.gouv.ci/datasets/statistiques-globales-sur-le-secteur-cacao-et-cafe")
+    assert slug == "statistiques-globales-sur-le-secteur-cacao-et-cafe"
+
+
+def test_datagouv_catalog_url_returns_none():
+    # L'URL générique /datasets (catalogue complet) ne doit cibler aucun dataset.
+    assert dataset_id_from_public_url("https://data.gouv.ci/datasets") is None
+
+
+def test_datagouv_selection_matches_slug_or_id():
+    # La sélection d'un dataset ciblé doit matcher le slug de l'URL contre l'id OU le slug
+    # du catalogue (le connecteur reçoit le slug, le catalogue expose l'id technique).
+    import types
+    from ivoiredata.connectors import data_gouv_ci
+
+    catalog = [
+        {"id": "vehoqo0k4rlbkdk12ar8oqg7", "slug": "statistiques-globales-sur-le-secteur-cacao-et-cafe", "title": "Cacao"},
+        {"id": "abc123", "slug": "autre-dataset", "title": "Autre"},
+    ]
+    wanted = {"statistiques-globales-sur-le-secteur-cacao-et-cafe"}
+    selected = []
+    for meta in catalog:
+        dsid = data_gouv_ci._dataset_id(meta)
+        identifiers = {dsid, meta.get("slug")} if dsid else set()
+        if not wanted or identifiers & wanted:
+            selected.append(meta)
+    assert len(selected) == 1
+    assert selected[0]["id"] == "vehoqo0k4rlbkdk12ar8oqg7"

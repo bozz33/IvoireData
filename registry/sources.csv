@@ -5,24 +5,24 @@ civ_datagouv_admin_units,Circonscriptions administratives et communes,geography,
 civ_datagouv_trade_1960_2022,Importations et exportations 1960-2022,economy,data.gouv.ci,https://data.gouv.ci/datasets/evolution-des-importations-et-exportations-de-la-cote-divoire-1960-2022,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_tourism_sites,Sites touristiques,tourism_culture,data.gouv.ci,https://data.gouv.ci/datasets/sites-touristiques-en-cote-divoire,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_urban_population,Population urbaine 1975-2021,demography,data.gouv.ci,https://data.gouv.ci/datasets/evolution-de-la-population-des-villes-de-plus-de-100-000-habitants-1975-2021,A_REDISTRIBUTABLE,OPEN,P0
-civ_datagouv_bac_1960_2025,Taux d’admission au BAC 1960-2025,education,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
-civ_datagouv_cocoa_coffee,Cacao et café,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_bac_1960_2025,Taux d’admission au BAC 1960-2025,education,data.gouv.ci,https://data.gouv.ci/datasets/evolution-du-taux-dadmission-au-bac-en-cote-divoire-de-1960-a-2025,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_cocoa_coffee,Cacao et café,agriculture,data.gouv.ci,https://data.gouv.ci/datasets/statistiques-globales-sur-le-secteur-cacao-et-cafe,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_cocoa_coffee_region,Production café/cacao par région,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
-civ_datagouv_rainfall_stations,Pluviométrie par station,environment_climate,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_rainfall_stations,Pluviométrie par station,environment_climate,data.gouv.ci,https://data.gouv.ci/datasets/donnees-pluviometriques-par-station-en-mm,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_rubber_region,Production d’hévéa par région,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_food_insecurity,Prévalence de l’insécurité alimentaire,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
-civ_datagouv_farmgate_prices,Prix bord champ,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
-civ_datagouv_forest_production,Productions forestières,environment_climate,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
-civ_datagouv_ghg,Émissions GES 1990-2020,environment_climate,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
-civ_datagouv_agricultural_households,Ménages agricoles,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_farmgate_prices,Prix bord champ,agriculture,data.gouv.ci,https://data.gouv.ci/datasets/prix-bord-champ-pratique-fcfakg-2021-a-2023-1,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_forest_production,Productions forestières,environment_climate,data.gouv.ci,https://data.gouv.ci/datasets/productions-forestieres-par-region-2023,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_ghg,Émissions GES 1990-2020,environment_climate,data.gouv.ci,https://data.gouv.ci/datasets/evolution-des-emissions-de-gaz-a-effet-de-serre-de-1990-2020-gg-eqco,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_agricultural_households,Ménages agricoles,agriculture,data.gouv.ci,https://data.gouv.ci/datasets/repartition-de-la-population-agricole-par-region-selon-le-sexe-et-le-niveau-dinstruction-en-2024,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_market_prices,Echo du marché,economy,data.gouv.ci,https://data.gouv.ci/datasets/echo-du-marche,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_food_prices_2022,Prix hebdomadaires produits vivriers,economy,data.gouv.ci,https://data.gouv.ci/datasets/prix-hebdomadaires-des-produits-vivriers-de-cote-divoire,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_fish_meat_trade,Poissons et viande production/import/export,agriculture,data.gouv.ci,https://data.gouv.ci/datasets/chiffres-sur-la-production-les-importations-et-exportations-de-poissons-et-de-viande,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_petroleum,Produits pétroliers et gaziers,extractives_energy,data.gouv.ci,https://data.gouv.ci/datasets/production-et-consommation-de-produits-petroliers-et-gaziers,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_crude_2017,Pétroles bruts traités SIR 2017,extractives_energy,data.gouv.ci,https://data.gouv.ci/datasets/caracteristiques-des-petroles-bruts-traites-par-la-sir-en-2017-12,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_tv_authorized,Télévisions et bouquets autorisés,media_communication,data.gouv.ci,https://data.gouv.ci/datasets/repertoire-des-chaines-de-television-et-bouquets-autorises-de-cote-d%27ivoire,A_REDISTRIBUTABLE,OPEN,P0
-civ_datagouv_livestock_2024,Flux de cheptel 2024,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
-civ_datagouv_milk_2024,Production de lait 2024,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_livestock_2024,Flux de cheptel 2024,agriculture,data.gouv.ci,https://data.gouv.ci/datasets/repartition-des-flux-entrants-et-sortants-de-cheptel-par-espece-en-percent,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_milk_2024,Production de lait 2024,agriculture,data.gouv.ci,https://data.gouv.ci/datasets/production-totale-et-moyenne-de-lait-par-region-selon-lespece-en-litres-en-2024,A_REDISTRIBUTABLE,OPEN,P0
 civ_anstat_nada,ANStat NADA,multidomain,ANStat,https://nada.anstat.ci/index.php/catalog,C_DATASET_SPECIFIC,MIXED,P0
 civ_anstat_eaa_2024_2025,Enquête Agricole Annuelle 2024-2025,agriculture,ANStat,https://nada.anstat.ci/index.php/catalog/34,D_RESEARCH_OR_DATASET_TERMS,DIRECT_ACCESS_REVIEW_TERMS,P0
 civ_osm_geofabrik,OpenStreetMap Côte d’Ivoire,geography,OpenStreetMap/Geofabrik,https://download.geofabrik.de/africa/ivory-coast.html,B_SOURCE_TERMS,OPEN,P0

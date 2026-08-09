@@ -114,7 +114,10 @@ def data_gouv_ci_resource(
         selected = []
         for meta in catalog:
             dsid = _dataset_id(meta)
-            if dsid and (not wanted or dsid in wanted):
+            # Un dataset peut être identifié par son id technique OU son slug : on accepte
+            # les deux, car dataset_id_from_public_url() renvoie le slug extrait de l'URL.
+            identifiers = {dsid, meta.get("slug")} if dsid else set()
+            if not wanted or identifiers & wanted:
                 selected.append(meta)
         if limit is not None:
             selected = selected[:limit]
