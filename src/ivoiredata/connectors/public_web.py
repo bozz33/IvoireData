@@ -4,10 +4,12 @@ import hashlib
 import io
 from collections import deque
 from html.parser import HTMLParser
+from pathlib import Path
 from urllib.parse import urldefrag, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 from ..cleaning import clean_text
+from ..snapshots import save_snapshot
 
 _SKIP_EXTENSIONS = {
     ".7z", ".avi", ".bin", ".bmp", ".css", ".doc", ".docx", ".dta", ".exe", ".gif",
@@ -107,7 +109,18 @@ def _robots_allowed(session, url: str, user_agent: str, cache: dict[str, RobotFi
     return True if parser is None else parser.can_fetch(user_agent, url)
 
 
-def public_document_resource(*, source_id: str, url: str, user_agent: str = "IvoireData/0.5", force: bool = False, crawl: bool = False, max_pages: int = 1, max_bytes: int = 20_000_000, metadata_only: bool = False):
+def public_document_resource(
+    *,
+    source_id: str,
+    url: str,
+    user_agent: str = "IvoireData/0.6",
+    force: bool = False,
+    crawl: bool = False,
+    max_pages: int = 1,
+    max_bytes: int = 20_000_000,
+    metadata_only: bool = False,
+    snapshot_dir: Path | None = None,
+):
     import dlt
     import requests
     from pypdf import PdfReader
@@ -156,12 +169,32 @@ def public_document_resource(*, source_id: str, url: str, user_agent: str = "Ivo
                 text = clean_text(raw.decode("utf-8", "replace"))
             else:
                 continue
-            if force or state.get(current) != digest:
+
+            changed = force or state.get(current) != digest
+            snapshot = {}
+            if changed:
+                snapshot = save_snapshot(
+                    snapshot_dir,
+                    source_id=source_id,
+                    url=current,
+                    content=raw,
+                    content_type=ctype or None,
+                )
                 for idx, chunk in enumerate(chunk_text(text)):
                     chunk_id = hashlib.sha256(f"{source_id}|{current}|{digest}|{idx}".encode()).hexdigest()
-                    yield {"chunk_id": chunk_id, "source_id": source_id, "source_url": current, "content_sha256": digest, "chunk_index": idx, "metadata_only": metadata_only, "text": chunk}
+                    yield {
+                        "chunk_id": chunk_id,
+                        "source_id": source_id,
+                        "source_url": current,
+                        "content_sha256": digest,
+                        "local_snapshot": snapshot.get("local_path"),
+                        "chunk_index": idx,
+                        "metadata_only": metadata_only,
+                        "text": chunk,
+                    }
                 state[current] = digest
             for candidate in links:
                 if candidate not in seen:
                     queue.append(candidate)
+
     return resource()
