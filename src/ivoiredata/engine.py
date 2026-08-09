@@ -44,7 +44,7 @@ class IvoireDataEngine:
         if spec.connector == "bulk_catalog":
             return bulk_catalog_resource(source_id=spec.source_id, page_url=spec.source_url, user_agent=self.settings.user_agent, download_dir=self.settings.data_dir / "raw_external" / spec.source_id, download_patterns=list(spec.options.get("download_patterns", [])), max_downloads=int(spec.options.get("max_downloads", 0)), max_bytes=int(spec.options.get("max_bytes", 250_000_000)))
         if spec.connector == "public_web":
-            return public_document_resource(source_id=spec.source_id, url=spec.source_url, force=force, user_agent=self.settings.user_agent, crawl=bool(spec.options.get("crawl", False)), max_pages=int(spec.options.get("max_pages", 1)), max_bytes=int(spec.options.get("max_bytes", 20_000_000)))
+            return public_document_resource(source_id=spec.source_id, url=spec.source_url, force=force, user_agent=self.settings.user_agent, crawl=bool(spec.options.get("crawl", False)), max_pages=int(spec.options.get("max_pages", 1)), max_bytes=int(spec.options.get("max_bytes", 20_000_000)), metadata_only=bool(spec.options.get("metadata_only", False)))
         raise ValueError(f"unsupported connector {spec.connector!r} for {spec.source_id}")
 
     def sync(self, source_id: str, *, force: bool = False) -> SyncResult:
