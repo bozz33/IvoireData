@@ -23,19 +23,24 @@ class _Links(HTMLParser):
             self.links.append((self.href, " ".join(self.text).strip())); self.href = None; self.text = []
 
 
+def _table_name(source_id: str) -> str:
+    safe = re.sub(r"[^a-z0-9]+", "_", source_id.lower()).strip("_")
+    return f"bulk_catalog_{safe}"[:120]
+
+
 def bulk_catalog_resource(*, source_id: str, page_url: str, user_agent: str = "IvoireData/0.5", download_dir: Path | None = None, download_patterns: list[str] | None = None, max_downloads: int = 0, max_bytes: int = 250_000_000):
     """Discover official bulk-download links and optionally snapshot selected files.
 
     By default this connector stores the current catalog only. Downloads are
     opt-in with regex patterns so a scheduled run cannot accidentally pull a
-    multi-gigabyte corpus.
+    multi-gigabyte corpus. Each source gets its own dlt table.
     """
     import dlt
     import requests
 
     patterns = [re.compile(p, re.I) for p in (download_patterns or [])]
 
-    @dlt.resource(name="bulk_catalog", write_disposition="replace")
+    @dlt.resource(name=_table_name(source_id), write_disposition="replace")
     def resource():
         session = requests.Session(); session.headers.update({"User-Agent": user_agent})
         response = session.get(page_url, timeout=120); response.raise_for_status()
