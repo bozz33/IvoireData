@@ -1,0 +1,64 @@
+source_id,title,domain,provider,source_url,rights_tier,access_tier,priority
+civ_datagouv_catalog,Portail officiel des données ouvertes de Côte d’Ivoire,multidomain,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_rgph2021,RGPH 2021,demography,data.gouv.ci,https://data.gouv.ci/datasets/recensement-de-la-population-ivoirienne,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_admin_units,Circonscriptions administratives et communes,geography,data.gouv.ci,https://data.gouv.ci/datasets/liste-des-circonscriptions-administratives-et-des-communes,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_trade_1960_2022,Importations et exportations 1960-2022,economy,data.gouv.ci,https://data.gouv.ci/datasets/evolution-des-importations-et-exportations-de-la-cote-divoire-1960-2022,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_tourism_sites,Sites touristiques,tourism_culture,data.gouv.ci,https://data.gouv.ci/datasets/sites-touristiques-en-cote-divoire,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_urban_population,Population urbaine 1975-2021,demography,data.gouv.ci,https://data.gouv.ci/datasets/evolution-de-la-population-des-villes-de-plus-de-100-000-habitants-1975-2021,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_bac_1960_2025,Taux d’admission au BAC 1960-2025,education,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_cocoa_coffee,Cacao et café,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_cocoa_coffee_region,Production café/cacao par région,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_rainfall_stations,Pluviométrie par station,environment_climate,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_rubber_region,Production d’hévéa par région,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_food_insecurity,Prévalence de l’insécurité alimentaire,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_farmgate_prices,Prix bord champ,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_forest_production,Productions forestières,environment_climate,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_ghg,Émissions GES 1990-2020,environment_climate,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_agricultural_households,Ménages agricoles,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_market_prices,Echo du marché,economy,data.gouv.ci,https://data.gouv.ci/datasets/echo-du-marche,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_food_prices_2022,Prix hebdomadaires produits vivriers,economy,data.gouv.ci,https://data.gouv.ci/datasets/prix-hebdomadaires-des-produits-vivriers-de-cote-divoire,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_fish_meat_trade,Poissons et viande production/import/export,agriculture,data.gouv.ci,https://data.gouv.ci/datasets/chiffres-sur-la-production-les-importations-et-exportations-de-poissons-et-de-viande,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_petroleum,Produits pétroliers et gaziers,extractives_energy,data.gouv.ci,https://data.gouv.ci/datasets/production-et-consommation-de-produits-petroliers-et-gaziers,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_crude_2017,Pétroles bruts traités SIR 2017,extractives_energy,data.gouv.ci,https://data.gouv.ci/datasets/caracteristiques-des-petroles-bruts-traites-par-la-sir-en-2017-12,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_tv_authorized,Télévisions et bouquets autorisés,media_communication,data.gouv.ci,https://data.gouv.ci/datasets/repertoire-des-chaines-de-television-et-bouquets-autorises-de-cote-d%27ivoire,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_livestock_2024,Flux de cheptel 2024,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_milk_2024,Production de lait 2024,agriculture,data.gouv.ci,https://data.gouv.ci/datasets,A_REDISTRIBUTABLE,OPEN,P0
+civ_anstat_nada,ANStat NADA,multidomain,ANStat,https://nada.anstat.ci/index.php/catalog,C_DATASET_SPECIFIC,MIXED,P0
+civ_anstat_eaa_2024_2025,Enquête Agricole Annuelle 2024-2025,agriculture,ANStat,https://nada.anstat.ci/index.php/catalog/34,D_RESEARCH_OR_DATASET_TERMS,DIRECT_ACCESS_REVIEW_TERMS,P0
+civ_osm_geofabrik,OpenStreetMap Côte d’Ivoire,geography,OpenStreetMap/Geofabrik,https://download.geofabrik.de/africa/ivory-coast.html,B_SOURCE_TERMS,OPEN,P0
+civ_geoboundaries,geoBoundaries CIV,geography,geoBoundaries,https://www.geoboundaries.org/api/current/gbOpen/CIV/,A_REDISTRIBUTABLE,OPEN,P0
+civ_worldbank_wdi,World Development Indicators CIV,multidomain,World Bank,https://api.worldbank.org/,A_REDISTRIBUTABLE,OPEN,P0
+civ_worldbank_projects,World Bank Projects CIV,economy,World Bank,https://api.worldbank.org/,A_REDISTRIBUTABLE,OPEN,P1
+civ_worldbank_climate,World Bank Climate CIV,environment_climate,World Bank,https://datahelpdesk.worldbank.org/knowledgebase/articles/889386-developer-information-overview,A_REDISTRIBUTABLE,OPEN,P1
+civ_faostat,FAOSTAT CIV,agriculture,FAO,https://www.fao.org/faostat/en/#data,B_SOURCE_TERMS,OPEN,P0
+civ_ilostat,ILOSTAT CIV,labor,ILO,https://rplumber.ilo.org/data/indicator/,B_SOURCE_TERMS,OPEN,P0
+civ_uis,UNESCO UIS CIV,education,UNESCO UIS,https://databrowser.uis.unesco.org/resources/bulk,B_SOURCE_TERMS,OPEN,P0
+civ_who_profile,WHO Côte d’Ivoire,health,WHO,https://data.who.int/countries/384,B_SOURCE_TERMS,OPEN,P1
+civ_bceao_bdef,BCEAO base économique et financière,economy,BCEAO,https://www.bceao.int/fr/content/la-base-des-donnees-economiques-et-financieres,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_dgi,DGI documentation fiscale et FNE,taxation,Direction Générale des Impôts,https://www.dgi.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_ohada,Actes uniformes et documentation OHADA,business_law,OHADA,https://www.ohada.org/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_agriculture_ministry,Ministère Agriculture rapports et statistiques,agriculture,Ministère de l’Agriculture,https://www.agriculture.gouv.ci/accueil,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_mena,Education rapports programmes statistiques,education,Ministère de l’Éducation Nationale,https://www.education.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_health_rass,RASS et publications sanitaires,health,Ministère de la Santé,https://www.sante.gouv.ci/index.php/publications/sous-categorie/26,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_health_e_depps,Etablissements sanitaires privés autorisés,health,DEPPS,https://www.depps.sante.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_artci,Statistiques télécoms/TIC,telecom,ARTCI,https://www.artci.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_customs,Douanes statistiques 1999-2025,economy,Direction Générale des Douanes,https://www.douanes.ci/info/statistiques,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_treasury_debt,Bulletins dette publique,economy,Trésor,https://www.tresor.gouv.ci/tres/bulletins-statistiques-de-la-dette-publique/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_pnd_2026_2030,Plan National de Développement 2026-2030,governance,Ministère du Plan,https://www.plan.gouv.ci/publications/sous-categorie/24,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_apif,Inclusion financière,economy,APIF,https://apif2022.finances.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+civ_dgmp,Marchés publics,public_procurement,DGMP,https://www.dgmp.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_servicepublic,Démarches administratives,administration,Portail Service Public,https://www.servicepublic.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_cnps,CNPS procédures taux et textes,social_protection,CNPS,https://www.cnps.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_justice,Justice documentation et statistiques,law_justice,Ministère de la Justice,https://www.justice.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_transport,Transport statistiques,transport,Ministère des Transports,https://www.transports.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_environment,Environnement rapports CDN et textes,environment_climate,Ministère de l’Environnement,https://www.environnement.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_environment_sie,Système d’Information Environnementale,environment_climate,SIE,https://sie.environnement.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+civ_mining,Mines statistiques,extractives_energy,Ministère Mines/Pétrole/Énergie,https://energie.gouv.ci/mines/statistiques-et-donnees-minieres,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_hydrocarbon,Pétrole et gaz,extractives_energy,Ministère Mines/Pétrole/Énergie,https://www.energie.gouv.ci/petrole/petrole-et-gaz,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_mnv_energy,MNV Énergie,environment_climate,Direction Générale de l’Énergie,https://mnv.dge.energie.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_idufci,IDUFCI cadre public,land_housing,MULCV,https://idufci.construction.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_construction_services,Urbanisme/logement services,land_housing,MULCV,https://web.construction.gouv.ci/services,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_onep,ONEP eau potable,water_sanitation,ONEP/DGPE,https://dgpe.gouv.ci/fr/entreprises/onep/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+civ_onad,ONAD assainissement,water_sanitation,ONAD,https://onad.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+civ_sodexam,SODEXAM météo et stations,environment_climate,SODEXAM,https://sodexam.com/meteorologie/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_fao_ag_census,Recensement agriculture 2015-2016,agriculture,FAO/Gouvernement CIV,https://microdata.fao.org/index.php/catalog/1609,D_RESEARCH_OR_DATASET_TERMS,OPEN_METADATA_DOWNLOAD_CONTROLLED,P0

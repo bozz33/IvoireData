@@ -1,0 +1,23 @@
+# Dataset payloads are local/object-storage artifacts, not source-control assets
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/quarantine/*
+!data/quarantine/.gitkeep
+
+# Public-source local ingestion cache
+cache/
+*.pdf.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Secrets and local env
+.env
+.env.*
+!.env.example

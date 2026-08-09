@@ -1,0 +1,7 @@
+[
+  {"collection_id":"civ_open","description":"Open and redistributable Côte d’Ivoire datasets","rights":["A_REDISTRIBUTABLE"]},
+  {"collection_id":"civ_public_rag","description":"Public official material ingested locally for factual extraction/RAG","rights":["C_PUBLIC_LOCAL_INGEST","C_POINTER_ONLY_LICENSE_UNCLEAR"]},
+  {"collection_id":"civ_facts","description":"Short normalized facts with provenance"},
+  {"collection_id":"civ_microdata","description":"Gated/research datasets isolated from general training","rights":["D_RESEARCH_ONLY","D_RESEARCH_OR_DATASET_TERMS"]},
+  {"collection_id":"civ_eval","description":"Held-out Côte d’Ivoire evaluation corpus; never train on it"}
+]

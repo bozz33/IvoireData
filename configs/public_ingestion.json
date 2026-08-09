@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "country": "CIV",
+  "scope": "multisector_non_language",
+  "rules": {
+    "respect_robots_txt": true,
+    "rate_limit_seconds": 1.5,
+    "max_file_mb": 100,
+    "user_agent": "IvoireData/0.2 (+https://github.com/bozz33/IvoireData)",
+    "public_unknown_rights": {
+      "raw_storage": "local_cache_only",
+      "derived": "facts_and_rag_chunks_with_provenance",
+      "public_repo": "metadata_and_short_derived_facts"
+    },
+    "open_licensed": {
+      "raw_storage": "allowed_if_source_license_allows",
+      "derived": "allowed",
+      "public_repo": "allowed_with_attribution"
+    },
+    "restricted_or_login": {"action": "do_not_bypass"}
+  },
+  "deferred_domains": ["language_nlp", "speech_local_languages"]
+}

@@ -1,0 +1,12 @@
+[project]
+name = "ivoiredata"
+version = "0.2.0"
+description = "Côte d’Ivoire multisector public-data registry, ingestion and provenance tooling"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+ingest = ["pypdf>=5.0"]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

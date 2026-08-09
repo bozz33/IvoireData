@@ -1,60 +1,51 @@
 # IvoireData 🇨🇮
 
-**Version 0.2.0 — multisector public-data foundation for Côte d’Ivoire (languages deferred)**
+**v0.2.0 — fondation multisectorielle de données pour une IA adaptée à la Côte d’Ivoire**
 
-IvoireData is a reproducible data foundation for AI/RAG/evaluation systems adapted to Côte d’Ivoire. Version 0.2 activates public-source ingestion across administration, law, taxation, economy, agriculture, health, education, telecom, energy, environment, transport, land/housing, water, geospatial and development data.
+La phase active couvre les données ivoiriennes **hors langues** : administration, fiscalité, droit, économie, agriculture, santé, éducation, télécoms, mines/pétrole/énergie, environnement, transport, foncier/logement, eau, météo, géographie et développement.
 
-## Current state
+## Ce que contient le dépôt
 
-- Master registry: **98 verified source/collection entries**.
-- Active non-language registry: **92 entries**.
-- Official Côte d’Ivoire open-data portal: **202 datasets** discoverable; Licence Ouverte permits reuse with attribution.
-- Public-but-unclear-rights sources are now ingested **locally** for factual extraction and RAG; raw documents are not automatically mirrored to the public repo.
-- Seed corpus: **25 short structured facts** with provenance.
-- Language/speech sources are preserved in the master registry but deferred from the active pipeline.
+- un registre actif de **60+ sources officielles et collections prioritaires** ;
+- découverte dynamique du catalogue officiel `data.gouv.ci` (**202 jeux observés au 2026-08-09**) ;
+- ingestion de sources publiques HTML/PDF avec SHA-256 et provenance ;
+- séparation `CIV-Open` / `CIV-Public-RAG` / `CIV-Facts` / `CIV-Microdata` / `CIV-Eval` ;
+- **25 faits structurés** de démarrage avec sources ;
+- CI et tests ;
+- langues et speech volontairement différés.
 
-## Collections
+Le paquet de recherche v0.2 maintient également le registre détaillé de 98 sources/collections établi pendant l’audit; le registre Git privilégie les familles actives et laisse les catalogues officiels se développer dynamiquement plutôt que de figer des centaines de lignes à la main.
 
-- `CIV-Open`: redistributable/open datasets.
-- `CIV-Public-RAG`: public official sources ingested locally with provenance.
-- `CIV-Facts`: normalized short factual records derived from public authoritative sources.
-- `CIV-Microdata`: gated/research datasets kept separate.
-- `CIV-Eval`: held-out evaluation datasets (future; never train on them).
+## Sources publiques à droits incertains
 
-## Start
+Elles ne sont plus ignorées : si une ressource est publiquement accessible sans contournement, IvoireData peut la récupérer **localement**, conserver le document brut dans `data/raw` (gitignored), en extraire texte/tableaux/faits et produire des chunks RAG avec URL/date/hash. Le document intégral n’est pas automatiquement remiroiré dans ce dépôt public lorsqu’un droit de redistribution n’est pas établi.
+
+## Démarrage
 
 ```bash
+pip install -e '.[ingest,dev]'
 python scripts/validate_registry.py
-python scripts/validate_seed_facts.py
 python scripts/build_public_queue.py
-python scripts/build_summary.py
+python scripts/validate_seed_facts.py
+pytest -q
 ```
 
-To ingest one public page locally:
+Ingestion d’une page ou d’un PDF public :
 
 ```bash
-pip install pypdf
-python scripts/ingest_public_web.py \
-  --source-id civ_dgi_2026_documentation \
-  https://dgi.gouv.ci/
+python scripts/ingest_public_web.py --source-id civ_dgi https://www.dgi.gouv.ci/
 ```
 
-Raw downloads and processed local corpora are ignored by Git. See `registry/ingestion_policy.csv` and `docs/RIGHTS_AND_ACCESS.md`.
+Découverte du catalogue open data :
 
-## Repository map
-
-```text
-registry/               master sources + active non-language sources + ingestion policy
-configs/                ingestion and collection policy
-scripts/                discovery, ingestion, validation and provenance tools
-data/seed/              small publishable factual seed records with provenance
-data/raw/               local cache (gitignored)
-data/processed/         local normalized/RAG material (gitignored)
-docs/                   architecture, coverage, rights, privacy, roadmap
-schemas/                record schemas
-tests/                  validation tests
+```bash
+python scripts/discover_data_gouv_ci.py
 ```
 
-## Licensing
+## Stockage
 
-Repository code: Apache-2.0. Repository-authored metadata/docs: CC BY 4.0. External sources retain their own licences/terms. IvoireData never claims that public visibility alone transfers copyright.
+Git contient le code, les registres, manifests et petits faits vérifiables. Les gros fichiers restent dans `data/raw`, `data/processed`, DVC/LakeFS ou un object storage afin que le projet puisse monter à des dizaines/centaines de Go sans casser Git.
+
+## Licences
+
+Le code original du projet est Apache-2.0. Les sources externes conservent leurs propres droits et obligations. Voir `docs/RIGHTS_AND_ACCESS.md`.
