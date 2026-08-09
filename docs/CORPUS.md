@@ -1,97 +1,56 @@
-# IvoireCorpus
+# Corpus et préparation d'entraînement — frontière de responsabilité
 
-IvoireCorpus est le produit destiné au pré-entraînement. Il est différent du `data_lake` : le lac reste vivant et se met à jour, tandis qu’une version de corpus est figée.
-
-## Pipeline
+Depuis **v0.6**, le produit officiel d'IvoireData est le **data lake local vivant, classé par domaine/source**, pas un corpus de pré-entraînement.
 
 ```text
-tables dlt / documents
-        │
-        ▼
-row_to_training_text
-        │
-        ▼
-nettoyage Unicode
-        │
-        ▼
-score qualité
-        │
-        ▼
-déduplication exacte
-        │
-        ▼
-shards JSONL
-        │
-        ▼
-manifest.json + manifest.sha256
+IvoireData
+  → collecte
+  → mise à jour
+  → provenance
+  → classement domaine/source
+  → raw + tables Parquet + documents + manifests
+  → data_lake/catalog.json
+
+Équipe modèle
+  → snapshot des entrées
+  → nettoyage avancé
+  → filtres PII/sécurité
+  → qualité
+  → déduplication exacte/fuzzy
+  → contamination eval
+  → mixture
+  → train/validation/test
+  → corpus figé
+  → tokenizer
+  → tokenisation
+  → packing/sharding
+  → loader d'entraînement
 ```
 
-## Construire
+## Pourquoi cette séparation
 
-```bash
-ivoiredata corpus-build civ-0.1 datagouv_rgph_2021 public_documents --output corpora
-```
+Le `data_lake/` doit rester à jour. Un corpus ayant servi à un entraînement doit au contraire être figé et reproductible. Mélanger les deux responsabilités rendrait difficile de savoir quelles données exactes ont produit un checkpoint.
 
-Options principales :
+Le contrat précis de livraison d'IvoireData est décrit dans [`DATA_HANDOFF_CONTRACT.md`](DATA_HANDOFF_CONTRACT.md).
 
-```bash
-ivoiredata corpus-build civ-0.1 TABLE1 TABLE2 \
-  --output corpora \
-  --shard-size 100000 \
-  --min-quality 0.35
-```
+L'automatisation complète de la partie équipe modèle est décrite dans [`DOWNSTREAM_AUTOMATION.md`](DOWNSTREAM_AUTOMATION.md).
 
-## Enregistrement d’entraînement
+## Modules historiques
 
-Chaque ligne JSONL contient au minimum :
+Le dépôt peut encore contenir des helpers historiques de corpus/tokenizer issus des versions précédentes. Ils ne constituent plus l'interface opérationnelle principale et ne doivent pas être considérés comme le pipeline officiel d'entraînement.
 
-```json
-{
-  "text": "...",
-  "sha256": "...",
-  "quality": 0.82,
-  "meta": {
-    "source_id": "...",
-    "source_url": "..."
-  }
-}
-```
+L'équipe modèle peut les réutiliser, les déplacer dans son propre dépôt ou les remplacer par son pipeline de préparation.
 
-Les champs de provenance disponibles sont préservés dans `meta`.
+## Règle d'intégration
 
-## Immutabilité
-
-Une version utilisée par un entraînement ne doit jamais être remplacée.
+Le pipeline downstream doit commencer uniquement à partir de :
 
 ```text
-civ-0.1 → training modèle A
-nouvelles données
-civ-0.2 → training modèle B
+data_lake/catalog.json
++
+data_lake/domains/<domain>/<source_id>/manifest.json
++
+raw/ tables/ documents/
 ```
 
-Le manifest contient la version, la date de création, les statistiques et `immutable=true`. Son propre SHA-256 est écrit dans `manifest.sha256`.
-
-## Tokenizer
-
-```bash
-python -m pip install -e '.[training]'
-ivoiredata tokenizer-train corpora/civ-0.1 --vocab-size 32000
-```
-
-Le tokenizer doit être versionné avec le modèle ou au minimum identifié par hash/version afin qu’un checkpoint puisse être reproduit.
-
-## Mélange de sources
-
-La V0.5 fabrique un corpus à partir des tables choisies. La pondération avancée par domaine/source sera une couche supplémentaire : agriculture, droit, économie, santé, éducation, connaissance générale, etc. Les statistiques du manifest doivent être inspectées avant tout entraînement.
-
-## Exclusions
-
-Ne pas inclure automatiquement :
-
-- microdonnées contrôlées non autorisées ;
-- documents dont les droits interdisent l’usage prévu ;
-- HTML de navigation vide ou répétitif ;
-- données de très faible qualité ;
-- secrets, identifiants ou données personnelles non nécessaires.
-
-Voir [`QUALITY_ASSURANCE.md`](QUALITY_ASSURANCE.md), [`RIGHTS_AND_ACCESS.md`](RIGHTS_AND_ACCESS.md) et [`SOURCES.md`](SOURCES.md).
+Il ne doit pas dépendre des détails internes des connecteurs IvoireData.
