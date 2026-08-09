@@ -50,6 +50,42 @@ def _paged(session, url: str, params: dict[str, Any], *, snapshot_dir: Path | No
         page += 1
 
 
+def _fetch_country_indicators(session, country: str, codes: list[str], source: int, *, snapshot_dir, snapshot_name) -> list[dict[str, Any]]:
+    """Récupère les valeurs d'un batch d'indicateurs, en subdivisant récursivement
+    si l'API renvoie 400 (un indicateur invalide fait rejeter tout le batch).
+
+    Les codes fautifs sont journalisés et ignorés : ils ne doivent pas faire échouer
+    toute la source WDI.
+    """
+    import requests
+
+    joined = ";".join(codes)
+    try:
+        return _paged(
+            session,
+            f"{API}/country/{country}/indicator/{joined}",
+            {"format": "json", "per_page": 20000, "source": source},
+            snapshot_dir=snapshot_dir,
+            snapshot_name=snapshot_name,
+        )
+    except requests.exceptions.HTTPError as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status != 400 or len(codes) <= 1:
+            raise  # autre erreur, ou code unique déjà rejeté : on remonte
+        # 400 sur un batch : on subdivise en deux pour isoler le/les indicateurs fautifs.
+        mid = len(codes) // 2
+        out: list[dict[str, Any]] = []
+        for half_index, half in enumerate((codes[:mid], codes[mid:])):
+            try:
+                out.extend(_fetch_country_indicators(session, country, half, source, snapshot_dir=snapshot_dir, snapshot_name=f"{snapshot_name}-h{half_index}"))
+            except requests.exceptions.HTTPError as exc2:
+                if getattr(getattr(exc2, "response", None), "status_code", None) == 400 and len(half) == 1:
+                    print(f"[world_bank_wdi] indicateur ignoré (400) : {half[0]}", flush=True)
+                    continue
+                raise
+        return out
+
+
 def world_bank_wdi_resource(
     *,
     country: str = "CIV",
@@ -85,10 +121,8 @@ def world_bank_wdi_resource(
             yield dlt.mark.with_table_name(row, "worldbank_wdi_indicators")
         for batch_index, codes_batch in enumerate(_chunks(codes, batch_size)):
             joined = ";".join(codes_batch)
-            rows = _paged(
-                session,
-                f"{API}/country/{country}/indicator/{joined}",
-                {"format": "json", "per_page": 20000, "source": source},
+            rows = _fetch_country_indicators(
+                session, country, codes_batch, source,
                 snapshot_dir=snapshot_dir,
                 snapshot_name=f"wdi-batch-{batch_index:04d}",
             )

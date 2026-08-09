@@ -56,6 +56,12 @@ def _decode(data: bytes) -> str:
 
 def _rows(data: bytes) -> Iterable[dict[str, Any]]:
     text = _decode(data)
+    # Certains datasets (ex. géométries GeoJSON inline, longues descriptions) contiennent
+    # des champs dépassant la limite par défaut du module csv (128 Ko). On lève la limite.
+    try:
+        csv.field_size_limit(max(csv.field_size_limit(), 16 * 1024 * 1024))
+    except OverflowError:
+        pass
     try:
         dialect = csv.Sniffer().sniff(text[:65536], delimiters=",;\t|")
     except csv.Error:
@@ -127,10 +133,18 @@ def data_gouv_ci_resource(
             if not force and state.get(dsid) == sig:
                 continue
             url = f"{API}/datasets/{quote(dsid, safe='')}/full"
-            r = session.get(url, timeout=180, headers={"Accept": "text/csv,application/csv,text/plain,*/*;q=0.5"})
-            r.raise_for_status()
+            try:
+                r = session.get(url, timeout=180, headers={"Accept": "text/csv,application/csv,text/plain,*/*;q=0.5"})
+                r.raise_for_status()
+            except Exception as exc:
+                # Certains datasets du catalogue ne sont pas accessibles via /full (permissions,
+                # statut non finalisé, etc.). On ne doit pas faire échouer toute la source :
+                # on journalise et on passe au dataset suivant.
+                print(f"[data_gouv_ci] dataset ignoré {dsid} -> {exc}", flush=True)
+                continue
             if "text/html" in r.headers.get("content-type", "").lower() and r.content.lstrip().startswith(b"<"):
-                raise RuntimeError(f"{dsid}: /full returned HTML")
+                print(f"[data_gouv_ci] dataset ignoré {dsid} -> /full returned HTML", flush=True)
+                continue
             table = _safe_table(dsid)
             snapshot = save_snapshot(
                 snapshot_dir,
@@ -141,7 +155,15 @@ def data_gouv_ci_resource(
                 name=f"{dsid}.csv",
             )
             raw_sha = str(snapshot["sha256"])
-            for idx, row in enumerate(_rows(r.content)):
+            try:
+                parsed_rows = list(enumerate(_rows(r.content)))
+            except Exception as exc:
+                # CSV mal formé ou encodage exotique : on conserve le snapshot brut mais
+                # on n'expose pas de lignes structurées pour ce dataset.
+                print(f"[data_gouv_ci] dataset non parsable {dsid} -> {exc}", flush=True)
+                state[dsid] = sig
+                continue
+            for idx, row in parsed_rows:
                 row.update({
                     "__ivoiredata_dataset_id": dsid,
                     "__ivoiredata_source_url": f"{PORTAL}/datasets/{dsid}",

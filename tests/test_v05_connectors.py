@@ -74,3 +74,65 @@ def test_public_web_accepts_verify_ssl_option():
     sig = inspect.signature(public_web.public_document_resource)
     assert "verify_ssl" in sig.parameters
     assert sig.parameters["verify_ssl"].default is True
+
+
+def test_world_bank_wdi_bisects_400_batches(monkeypatch):
+    # _fetch_country_indicators doit subdiviser récursivement un batch qui reçoit un 400
+    # pour isoler les indicateurs fautifs, sans faire échouer toute la source.
+    import requests
+    from ivoiredata.connectors import world_bank
+
+    class _Resp:
+        def __init__(self, status, payload=None):
+            self.status_code = status
+            self._payload = payload or []
+        def json(self):
+            return [{"pages": 1}, self._payload]
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                err = requests.exceptions.HTTPError(response=self)
+                raise err
+
+    calls = {"n": 0}
+
+    def fake_paged(session, url, params, *, snapshot_dir, snapshot_name):
+        # Simule : batch complet [A, BAD, B] -> 400 ; moitiés -> 200 avec données ; BAD seul -> 400
+        calls["n"] += 1
+        if "BAD" in url and url.count(";") == 0:
+            raise requests.exceptions.HTTPError(response=_Resp(400))
+        if "BAD" in url:
+            raise requests.exceptions.HTTPError(response=_Resp(400))
+        return [{"indicator": {"id": "OK"}, "value": 1}]
+
+    monkeypatch.setattr(world_bank, "_paged", fake_paged)
+    rows = world_bank._fetch_country_indicators(
+        session=None, country="CIV", codes=["A", "BAD", "B"], source=2,
+        snapshot_dir=None, snapshot_name="t",
+    )
+    # BAD est ignoré, les autres sont conservés.
+    assert any(r.get("indicator", {}).get("id") == "OK" for r in rows)
+
+
+def test_ilostat_rds_parse_is_isolated_in_subprocess():
+    # _read_rds_rows doit lever RdsParseError (et non segfault le process) si le
+    # subprocess pyreadr crash (exit 139).
+    from ivoiredata.connectors.ilostat import _read_rds_rows, RdsParseError
+    import subprocess
+    from pathlib import Path
+
+    class _FakeCompleted:
+        returncode = 139  # SIGSEGV
+        stdout = ""
+        stderr = ""
+
+    from ivoiredata.connectors import ilostat
+    orig = subprocess.run
+    subprocess.run = lambda *a, **k: _FakeCompleted()
+    try:
+        try:
+            list(_read_rds_rows(Path("x.rds")))
+            assert False, "devrait lever RdsParseError"
+        except RdsParseError as exc:
+            assert "segfaulted" in str(exc)
+    finally:
+        subprocess.run = orig
