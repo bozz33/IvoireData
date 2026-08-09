@@ -13,7 +13,7 @@ class Settings:
     state_dir: Path = Path(".ivoiredata/state")
     registry_path: Path = Path("registry/sources.csv")
     runtime_config_path: Path = Path("configs/runtime_sources.json")
-    user_agent: str = "IvoireData/0.4.1 (+https://github.com/bozz33/IvoireData)"
+    user_agent: str = "IvoireData/0.4.2 (+https://github.com/bozz33/IvoireData)"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -27,6 +27,5 @@ class Settings:
         )
 
     def configure_dlt_env(self) -> None:
-        """Force dlt filesystem destination to a directory on this machine."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
         os.environ["DESTINATION__FILESYSTEM__BUCKET_URL"] = self.data_dir.resolve().as_uri()

@@ -1,4 +1,40 @@
 {
-  "defaults": {"connector":"auto","refresh_hours":168,"auto_sync":false,"options":{}},
-  "sources": {"civ_datagouv_catalog":{"connector":"data_gouv_ci","refresh_hours":24,"auto_sync":true}}
+  "defaults": {
+    "connector": "auto",
+    "refresh_hours": 168,
+    "auto_sync": false,
+    "options": {}
+  },
+  "sources": {
+    "civ_datagouv_catalog": {"connector": "data_gouv_ci", "refresh_hours": 24, "auto_sync": true},
+    "civ_worldbank_wdi": {"connector": "world_bank_wdi", "refresh_hours": 168, "auto_sync": true, "options": {"country": "CIV", "source": 2, "batch_size": 60}},
+    "civ_geoboundaries": {"connector": "geoboundaries", "refresh_hours": 720, "auto_sync": true},
+    "civ_bceao_bdef": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 25}},
+    "civ_dgi": {"connector": "public_web", "refresh_hours": 24, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
+    "civ_ohada": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
+    "civ_agriculture_ministry": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
+    "civ_mena": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
+    "civ_health_rass": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
+    "civ_health_e_depps": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
+    "civ_artci": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
+    "civ_customs": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
+    "civ_treasury_debt": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
+    "civ_pnd_2026_2030": {"connector": "public_web", "refresh_hours": 720, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
+    "civ_apif": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 25}},
+    "civ_dgmp": {"connector": "public_web", "refresh_hours": 24, "auto_sync": true, "options": {"crawl": true, "max_pages": 50}},
+    "civ_servicepublic": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 50}},
+    "civ_cnps": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
+    "civ_justice": {"connector": "public_web", "refresh_hours": 72, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
+    "civ_transport": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
+    "civ_environment": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 40}},
+    "civ_environment_sie": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
+    "civ_mining": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
+    "civ_hydrocarbon": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
+    "civ_mnv_energy": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
+    "civ_idufci": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
+    "civ_construction_services": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
+    "civ_onep": {"connector": "public_web", "refresh_hours": 720, "auto_sync": true, "options": {"crawl": true, "max_pages": 20}},
+    "civ_onad": {"connector": "public_web", "refresh_hours": 168, "auto_sync": true, "options": {"crawl": true, "max_pages": 30}},
+    "civ_sodexam": {"connector": "public_web", "refresh_hours": 24, "auto_sync": true, "options": {"crawl": true, "max_pages": 25}}
+  }
 }

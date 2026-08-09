@@ -8,7 +8,7 @@ from .query import query_sql
 from .ranking import rank_sources
 from .search import search_documents
 
-app = FastAPI(title="IvoireData Engine", version="0.4.1")
+app = FastAPI(title="IvoireData Engine", version="0.4.2")
 
 
 class SQLRequest(BaseModel):
@@ -19,7 +19,7 @@ class SQLRequest(BaseModel):
 @app.get("/health")
 def health():
     engine = IvoireDataEngine()
-    return {"status": "ok", "engine": "IvoireData", "version": "0.4.1", "storage": "local", "data_dir": str(engine.settings.data_dir)}
+    return {"status": "ok", "engine": "IvoireData", "version": "0.4.2", "storage": "local", "data_dir": str(engine.settings.data_dir)}
 
 
 @app.get("/sources")
@@ -38,9 +38,15 @@ def status(public_only: bool = True):
     return {"rows": rows}
 
 
+@app.get("/coverage")
+def coverage():
+    return IvoireDataEngine().coverage()
+
+
 @app.post("/sync/{source_id}")
 def sync(source_id: str, force: bool = False):
-    result = IvoireDataEngine().sync(source_id, force=force)
+    try: result = IvoireDataEngine().sync(source_id, force=force)
+    except (KeyError, PermissionError) as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
     if result.status != "success": raise HTTPException(status_code=502, detail=result.details)
     return result.__dict__
 

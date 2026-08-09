@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ivoiredata"
-version = "0.4.1"
+version = "0.4.2"
 description = "Local-first Côte d'Ivoire data engine and training-corpus factory built on dlt"
 requires-python = ">=3.10"
 dependencies = [

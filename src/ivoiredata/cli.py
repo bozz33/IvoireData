@@ -16,6 +16,7 @@ def parser():
     sub = p.add_subparsers(dest="command", required=True)
     s = sub.add_parser("sources"); s.add_argument("--public", action="store_true")
     s = sub.add_parser("status"); s.add_argument("--public", action="store_true")
+    sub.add_parser("coverage")
     s = sub.add_parser("sync"); s.add_argument("source_id", nargs="?"); s.add_argument("--due", action="store_true"); s.add_argument("--all-public", action="store_true"); s.add_argument("--force", action="store_true")
     s = sub.add_parser("scheduler"); s.add_argument("--interval", type=int, default=3600); s.add_argument("--once", action="store_true")
     s = sub.add_parser("query"); s.add_argument("sql"); s.add_argument("--max-rows", type=int, default=1000)
@@ -35,6 +36,8 @@ def main(argv=None) -> int:
             state = engine.freshness.data.get(spec.source_id, {})
             print(json.dumps({"source_id": spec.source_id, "connector": spec.connector, "refresh_hours": spec.refresh_hours, "auto_sync": spec.auto_sync, "due": engine.freshness.due(spec), "last_success": state.get("last_success"), "last_status": state.get("last_status", "never")}, ensure_ascii=False))
         return 0
+    if args.command == "coverage":
+        print(json.dumps(IvoireDataEngine().coverage(), ensure_ascii=False, indent=2)); return 0
     if args.command == "sync":
         engine = IvoireDataEngine()
         if args.due: results = engine.sync_due(auto_only=not args.all_public, public_only=True, force=args.force)

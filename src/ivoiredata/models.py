@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+
 @dataclass(frozen=True)
 class SourceSpec:
     source_id: str
@@ -21,7 +22,15 @@ class SourceSpec:
 
     @property
     def public(self) -> bool:
-        return self.access_tier.upper() == "OPEN" and not self.rights_tier.upper().startswith("D_")
+        """Whether the source is safe for unattended public ingestion.
+
+        OPEN and OPEN_PUBLIC are synchronizable. MIXED, controlled/research
+        access and any D_* rights tier stay manual by design.
+        """
+        access = self.access_tier.upper()
+        rights = self.rights_tier.upper()
+        return access in {"OPEN", "OPEN_PUBLIC"} and not rights.startswith("D_")
+
 
 @dataclass
 class SyncResult:
