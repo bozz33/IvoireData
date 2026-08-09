@@ -5,7 +5,7 @@ import json
 
 from .delivery import inventory, source_paths
 from .engine import IvoireDataEngine
-from .query import query_sql
+from .query import query_source_sql
 from .scheduler import run_forever, run_once
 
 
@@ -19,7 +19,7 @@ def parser():
     s = sub.add_parser("source-path"); s.add_argument("source_id")
     s = sub.add_parser("sync"); s.add_argument("source_id", nargs="?"); s.add_argument("--due", action="store_true"); s.add_argument("--all-public", action="store_true"); s.add_argument("--force", action="store_true")
     s = sub.add_parser("scheduler"); s.add_argument("--interval", type=int, default=3600); s.add_argument("--once", action="store_true")
-    s = sub.add_parser("query"); s.add_argument("sql"); s.add_argument("--max-rows", type=int, default=1000)
+    s = sub.add_parser("query"); s.add_argument("source_id"); s.add_argument("sql"); s.add_argument("--max-rows", type=int, default=1000)
     return p
 
 
@@ -61,7 +61,7 @@ def main(argv=None) -> int:
             return 1 if any(r.status != "success" for r in results) else 0
         run_forever(args.interval); return 0
     if args.command == "query":
-        print(json.dumps(query_sql(args.sql, max_rows=args.max_rows), ensure_ascii=False, default=str, indent=2)); return 0
+        print(json.dumps(query_source_sql(args.source_id, args.sql, max_rows=args.max_rows), ensure_ascii=False, default=str, indent=2)); return 0
     return 2
 
 
