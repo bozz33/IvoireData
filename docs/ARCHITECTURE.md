@@ -1,115 +1,125 @@
-# Architecture IvoireData v0.5
+# Architecture IvoireData v0.6
 
-IvoireData est un moteur **local-first**. Git contient le code et les règles ; le PC contient les données.
+IvoireData est un moteur **local-only pour les données**. Git contient le code, le registre et la documentation ; le PC contient les payloads réels.
 
 ## Vue générale
 
 ```text
-                    registry/sources.csv
-                           │
-               configs/runtime_sources.json
-                           │
-                           ▼
-                    SourceRegistry
-                           │
-                    Connector Router
-                           │
-       ┌───────────────────┼──────────────────────────────┐
-       │                   │                              │
- API structurées      sites/documents              gros snapshots
- Data Fair/WB/ILO     HTML/PDF/bulk                OSM/archives
-       │                   │                              │
-       └───────────────────┼──────────────────────────────┘
-                           ▼
-                          dlt
-                           │
-              Extract → Normalize → Load
-                           │
-              ┌────────────┴────────────┐
-              │                         │
-        data_lake/                .ivoiredata/
-     tables + raw_external        état/fraîcheur
-              │
-       ┌──────┼──────────────┐
-       │      │              │
-      SQL   Search       Corpus Factory
-                             │
-                    clean → quality → dedup
-                             │
-                         corpora/
-                             │
-                        tokenizer/
-                             │
-                       pré-entraînement
+registry/sources.csv + configs/runtime_sources.json
+                      │
+                      ▼
+                SourceRegistry
+                      │
+                Connector Router
+                      │
+      API / Web / PDF / Files / Bulk / Geo
+                      │
+                      ▼
+                     dlt
+                      │
+             pipeline PAR SOURCE
+                      │
+                      ▼
+ data_lake/domains/<domain>/<source_id>/
+      ├── raw/
+      ├── tables/          ← Parquet dlt
+      ├── documents/
+      └── manifest.json
+                      │
+                      ▼
+             data_lake/catalog.json
+                      │
+        ┌─────────────┴──────────────┐
+        ▼                            ▼
+ API/CLI/SQL local          pipeline équipe modèle
+                             clean/filter/dedup/...
 ```
+
+## Pourquoi un pipeline par source
+
+Avant v0.6, plusieurs sources partageaient le même dataset filesystem dlt. v0.6 isole chaque source afin de garantir :
+
+- arborescence lisible ;
+- état/checkpoints isolés ;
+- évolution de schéma indépendante ;
+- requêtes source par source ;
+- suppression/restauration d'une source sans toucher les autres ;
+- handoff direct au pipeline d'entraînement.
 
 ## Control plane
 
-Le control plane est constitué de petits fichiers Git :
-
 - `registry/sources.csv` : identité, producteur, domaine, URL, droits, priorité ;
 - `configs/runtime_sources.json` : connecteur, fréquence, auto-sync, options ;
-- `.ivoiredata/state/freshness.json` : état runtime local, hors Git ;
-- état dlt : checkpoints et métadonnées techniques.
+- `.ivoiredata/state/freshness.json` : dernier état opérationnel ;
+- état dlt : état technique de chaque pipeline source ;
+- `data_lake/catalog.json` : inventaire machine-readable du data lake.
 
-Aucune base serveur n’est requise.
+Aucune base PostgreSQL n'est requise.
 
 ## Data plane
 
-`data_lake/` contient les payloads réellement acquis. Les gros fichiers spécifiques sont rangés dans `data_lake/raw_external/<source_id>/`.
-
-Exemples :
-
 ```text
 data_lake/
-├── ivoiredata/              tables dlt
-└── raw_external/
-    ├── civ_osm_geofabrik/
-    ├── civ_faostat/
-    └── civ_uis/
+├── catalog.json
+└── domains/
+    ├── agriculture/
+    │   ├── civ_faostat/
+    │   └── civ_agriculture_ministry/
+    ├── health/
+    ├── education/
+    ├── economy/
+    ├── geography/
+    └── ...
 ```
+
+Chaque package source contient :
+
+- `raw/` : payload source original lorsque conservable ;
+- `tables/` : tables normalisées dlt en Parquet ;
+- `documents/` : pages/PDF/documentation collectés ;
+- `manifest.json` : provenance, statut, fréquence et inventaire.
 
 ## Fraîcheur
 
-Le scheduler local ne télécharge pas toutes les sources à chaque réveil :
-
 ```text
 scheduler
-   │
-   ▼
+  ↓
 FreshnessStore.due(source)
-   │
-   ├── non → rien
-   └── oui → connector → dlt → succès/erreur → freshness.json
+  ├─ non → ne rien faire
+  └─ oui
+      ↓
+   connector
+      ↓
+ hash/signature/checksum/state
+      ↓
+ source package
+      ↓
+ manifest.json + catalog.json
 ```
 
-Les connecteurs utilisent signatures, hash, checksum ou état dlt pour éviter le retraitement inutile.
+## Frontière avec l'entraînement
 
-## Séparation entraînement / données fraîches
+IvoireData **ne fabrique plus officiellement le corpus/tokenizer**. Il livre le data lake vivant et organisé. Le pipeline de l'équipe modèle fige ensuite un état du `catalog.json` et construit ses releases.
 
-Le moteur reste dynamique, le corpus d’entraînement reste figé :
+Voir :
 
-```text
-sources mises à jour → data_lake courant
-                           │
-                           ▼
-                    corpus-build civ-0.1
-                           │
-                     corpus immutable
-                           │
-                       training
-
-nouvelles sources → data_lake courant → corpus-build civ-0.2
-```
+- [`DATA_HANDOFF_CONTRACT.md`](DATA_HANDOFF_CONTRACT.md)
+- [`DOWNSTREAM_AUTOMATION.md`](DOWNSTREAM_AUTOMATION.md)
 
 ## Accès contrôlé
 
-Une source `MIXED` n’autorise pas automatiquement ses microdonnées. `metadata_only=true` permet seulement la récupération du catalogue et des métadonnées publiques. Les droits `D_*` restent bloqués pour l’ingestion automatique.
+Une source `MIXED` avec `metadata_only=true` autorise uniquement les pages/catalogues publics. Les routes et formats identifiés comme microdonnées sont filtrés avant téléchargement. Les sources `D_*` restent hors ingestion automatique.
 
 ## Query layer
 
-Le pipeline filesystem dlt expose un client SQL local. L’API et la CLI utilisent cette couche pour lire les tables sans PostgreSQL.
+Chaque pipeline filesystem dlt peut être interrogé localement via DuckDB/SQL. La CLI utilise :
+
+```bash
+ivoiredata query SOURCE_ID "SELECT ..."
+```
+
+Les tables sont stockées en Parquet pour faciliter aussi l'accès direct par d'autres outils.
 
 ## Extension
 
-L’architecture est modulaire : ajouter une API nécessite généralement un connecteur + une entrée de configuration, pas une modification du corpus ou du scheduler. Voir [`CONNECTORS.md`](CONNECTORS.md) et [`ADDING_SOURCE.md`](ADDING_SOURCE.md).
+Ajouter une source = registre + runtime config + connecteur existant ou spécialisé + tests + documentation. Voir [`ADDING_SOURCE.md`](ADDING_SOURCE.md).
