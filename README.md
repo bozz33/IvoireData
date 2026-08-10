@@ -1,27 +1,59 @@
 # IvoireData 🇨🇮
 
-**v0.8.1 — moteur local CI Gold de collecte, classification, audit et qualification des données publiques de Côte d’Ivoire**
+**v0.8.2 — moteur local CI Gold de collecte officielle, incrémentale, classification, audit et qualification des données publiques de Côte d’Ivoire**
 
 IvoireData collecte et organise des sources publiques ivoiriennes, conserve provenance/droits, classe les contenus par domaine, ajoute `country_code=CIV`, gère les mises à jour manuelles/automatiques et mesure la couverture nationale sans confondre « source connue » et « donnée réellement livrée ».
 
+## v0.8.2 : synchronisation incrémentale robuste
+
+La vérification d'une source ne signifie plus que son contenu est retéléchargé. Le moteur utilise, dans cet ordre :
+
+1. version officielle upstream (`DateUpdate`, `last.update`, `lastupdated`, etc.) ;
+2. `ETag` / `Last-Modified` et HTTP `304 Not Modified` ;
+3. SHA-256 lorsque le serveur n'expose aucun validateur.
+
+L'état réseau est persistant dans :
+
+```text
+.ivoiredata/state/upstreams.json
+```
+
+Les états JSON sont écrits atomiquement. Un état corrompu est mis en quarantaine sous `*.corrupt-<timestamp>` au lieu d'empêcher le moteur de démarrer.
+
+`--force` signifie désormais **vérifier maintenant**. Il ne force jamais volontairement le téléchargement d'une version identique déjà matérialisée.
+
+```bash
+ivoiredata upstreams
+ivoiredata upstreams civ_datagouv_catalog
+ivoiredata upstreams civ_ilostat
+ivoiredata upstreams civ_faostat
+```
+
+Détails : [`docs/UPSTREAM_INCREMENTAL.md`](docs/UPSTREAM_INCREMENTAL.md).
+
+## Sources structurées principales
+
+- **Data.gouv.ci / Data Fair** : catalogue public anonyme officiel ; `/full` en priorité puis fallback officiel `/lines`, avec `page>=1` et suivi du curseur `next` jusqu'à son absence.
+- **ILOSTAT** : TOC officiel des indicateurs + API CSV par indicateur avec `id=<indicator>&ref_area=CIV`; `last.update` décide quels indicateurs doivent être redemandés. Le chemin RDS reste volontairement désactivé.
+- **FAOSTAT** : catalogue bulk officiel `datasets_E.json`; tous les domaines courants sont découverts, les archives `Discontinued` sont exclues par défaut, et `DateUpdate/FileRows/FileSize` évitent le retéléchargement des ZIP inchangés.
+- **World Bank WDI** : API V2 officielle ; `lastupdated` de la source WDI sert de signature globale.
+- **World Bank Projects** : API Projects officielle ; HTTP validators + hash canonique.
+- **UNESCO UIS** : API publique officielle ; HTTP validators par artefact + SHA fallback.
+- **geoBoundaries** : API/GeoJSON ; validators + SHA.
+- **OpenStreetMap / Geofabrik** : snapshot PBF ; checksum `.md5` officiel puis validators HTTP en fallback.
+- **Portails institutionnels** : ETag/Last-Modified quand disponibles ; SHA-256 sinon. Un `304` conserve également les liens déjà découverts pour poursuivre le crawl.
+
 ## Objectif CI Gold
 
-CI Gold ne signifie pas « toutes les informations qui existent en Côte d’Ivoire ». Il signifie que toutes les grandes familles nationales prioritaires ont été identifiées et évaluées avec un statut explicite :
+CI Gold ne signifie pas « toutes les informations qui existent en Côte d’Ivoire ». Il signifie que toutes les grandes familles nationales prioritaires ont été identifiées, évaluées et collectées autant que les sources publiques/droits le permettent :
 
 ```text
 COVERED | PARTIAL | CONTROLLED | UNAVAILABLE | UNRESOLVED | MISSING
 ```
 
-La matrice v2 couvre désormais plus de 50 familles : institutions, droit, finances publiques, élections, administration territoriale, population, migration, emploi, pauvreté, genre, jeunesse, protection sociale, économie, industrie, investissement, agriculture, santé, éducation, numérique, télécoms, cybersécurité publique, innovation, environnement, énergie, infrastructures, culture, sport, histoire, langues, etc.
+La matrice v2 couvre plus de 50 familles : institutions, droit, finances publiques, élections, administration territoriale, population, migration, emploi, pauvreté, genre, jeunesse, protection sociale, économie, industrie, investissement, agriculture, santé, éducation, numérique, télécoms, cybersécurité publique, innovation, environnement, énergie, infrastructures, culture, sport, histoire, langues, etc.
 
-## Registres
-
-```text
-registry/sources.csv                  socle historique
-registry/ci_gold_completeness.csv     compléments institutionnels CI Gold
-```
-
-La v0.8.1 ajoute notamment : Femme/Famille/Enfant, Jeunesse, Commerce/Industrie, CEPICI, ministère du Numérique, Intérieur/Décentralisation, ONEF, Fonction publique, HABG, Défense, Assemblée nationale, Sénat, Conseil constitutionnel, Cour des comptes, CESEC, Présidence, Diplomatie, Solidarité/Pauvreté et MIRAH.
+CI Gold bloque maintenant également si une grande source structurée annonce un **échec partiel** ou un **backlog de données non encore transférées**.
 
 ## Métadonnées nationales
 
@@ -43,12 +75,12 @@ classification_status
 classification_confidence
 ```
 
-Les documents restent stockés une seule fois dans leur source canonique ; les métadonnées permettent les vues multidomaines sans duplication physique.
-
 ## Commandes principales
 
 ```bash
+ivoiredata --version
 ivoiredata audit
+ivoiredata upstreams
 ivoiredata coverage-audit
 ivoiredata quality-audit
 ivoiredata discoveries
@@ -56,36 +88,6 @@ ivoiredata qualification status
 ivoiredata ci-gold
 ivoiredata ci-gold --write
 ```
-
-`discoveries` compare le catalogue Data.gouv.ci local aux mappings explicites du registre. Les nouveaux datasets sont seulement signalés : **aucune ingestion automatique sans revue domaine/droits**.
-
-## PDF scannés
-
-Les PDF avec trop peu de texte extractible sont conservés mais marqués :
-
-```text
-NEEDS_OCR
-```
-
-Un sidecar `*.needs_ocr.json` est créé. IvoireData **ne lance pas d’OCR automatiquement** ; l’audit qualité expose le nombre de documents à traiter.
-
-## CI Gold gates
-
-`ivoiredata ci-gold` exige notamment :
-
-- score >=95 ;
-- aucun P0 `MISSING/UNRESOLVED` ;
-- aucun `EMPTY/ERROR` critique actif ;
-- droits présents ;
-- manifests v3 complets ;
-- métadonnées documentaires complètes ;
-- catalogue présent ;
-- **14 jours réels de qualification automatique** ;
-- au moins 14 cycles ;
-- zéro erreur automatique ;
-- toutes les sources automatiques actives réellement exercées au moins une fois.
-
-Le logiciel v0.8.1 est une fondation/candidate CI Gold. Le data lake n’est « CI Gold final » que lorsque le run local retourne `approved=true`.
 
 ## Mises à jour dynamiques
 
@@ -119,38 +121,24 @@ data_lake/
 .ivoiredata/state/
 ├── freshness.json
 ├── runtime_overrides.json
+├── upstreams.json
 └── ci_gold_qualification.json
 ```
 
-## Migration / validation locale
+## Mise à niveau v0.8.2
+
+Pendant la migration, arrêter le scheduler, sauvegarder `.ivoiredata/` et le data lake, reconstruire l'image, puis migrer **les grandes sources structurées une par une**. Il n'est pas nécessaire de relancer immédiatement un `--all-public --force`.
 
 ```bash
 git pull
 docker compose build
 docker compose --profile run up -d
 
-docker compose --profile sync run --rm sync-once \
-  sh -c "ivoiredata sync --all-public --force"
-
-docker compose exec api ivoiredata audit
-docker compose exec api ivoiredata coverage-audit
-docker compose exec api ivoiredata quality-audit
-docker compose exec api ivoiredata discoveries
+docker compose exec api ivoiredata --version
+docker compose exec api ivoiredata upstreams
 ```
 
-Quand le full sync et les audits sont propres :
-
-```bash
-docker compose exec api ivoiredata qualification start
-```
-
-Après la vraie fenêtre de qualification :
-
-```bash
-docker compose exec api ivoiredata qualification status
-docker compose exec api ivoiredata ci-gold
-docker compose exec api ivoiredata ci-gold --write
-```
+Procédure complète et tests anti-retéléchargement : [`docs/UPSTREAM_INCREMENTAL.md`](docs/UPSTREAM_INCREMENTAL.md).
 
 ## API
 
@@ -161,6 +149,8 @@ GET  /status
 GET  /coverage
 GET  /coverage-audit
 GET  /quality-audit
+GET  /upstreams
+GET  /upstreams/{source_id}
 GET  /discoveries
 GET  /audit
 GET  /ci-gold
@@ -177,24 +167,3 @@ POST /query/source/{source_id}
 ## Frontière downstream
 
 IvoireData s’arrête au data lake qualifié et aux preuves. Le downstream reste responsable de : validation finale des droits → nettoyage → PII → qualité → déduplication → corpus → tokenizer → shards → entraînement.
-
-## Documentation
-
-- [`docs/CI_GOLD.md`](docs/CI_GOLD.md)
-- [`docs/CI_COVERAGE_MATRIX.md`](docs/CI_COVERAGE_MATRIX.md)
-- [`docs/USAGE_GUIDE.md`](docs/USAGE_GUIDE.md)
-- [`docs/AUDIT.md`](docs/AUDIT.md)
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
-- [`docs/DATA_HANDOFF_CONTRACT.md`](docs/DATA_HANDOFF_CONTRACT.md)
-- [`docs/RIGHTS_AND_ACCESS.md`](docs/RIGHTS_AND_ACCESS.md)
-
-## Principes
-
-1. Côte d’Ivoire uniquement jusqu’à CI Gold final.
-2. Aucun contournement auth/CAPTCHA/paywall/licence.
-3. `SUCCESS` technique ne signifie pas couverture.
-4. Les sources contrôlées peuvent être correctement évaluées sans ingérer leurs payloads.
-5. Les nouvelles découvertes ne sont jamais activées sans revue.
-6. Une erreur upstream ne supprime pas l’ancienne livraison valide.
-7. Le data lake réel reste hors Git.
