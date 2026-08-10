@@ -348,6 +348,30 @@
         "crawl": true,
         "max_pages": 25
       }
+    },
+    "civ_datagouv_cocoa_coffee_region": {
+      "enabled": false,
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": false,
+      "options": {},
+      "__note": "UNRESOLVED_DATASET — aucun slug trouvé dans le catalogue data.gouv.ci"
+    },
+    "civ_datagouv_rubber_region": {
+      "enabled": false,
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": false,
+      "options": {},
+      "__note": "UNRESOLVED_DATASET — aucun slug trouvé dans le catalogue data.gouv.ci"
+    },
+    "civ_datagouv_food_insecurity": {
+      "enabled": false,
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": false,
+      "options": {},
+      "__note": "UNRESOLVED_DATASET — aucun slug trouvé dans le catalogue data.gouv.ci"
     }
   }
 }

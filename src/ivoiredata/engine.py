@@ -92,6 +92,8 @@ class IvoireDataEngine:
 
     def sync(self, source_id: str, *, force: bool = False) -> SyncResult:
         spec = self.registry.get(source_id)
+        if not spec.enabled:
+            raise PermissionError(f"{source_id} is disabled — enable it first with: ivoiredata source enable {source_id}")
         if not spec.public:
             raise PermissionError(f"{source_id} is not configured for unattended public ingestion")
         started = _now()

@@ -18,14 +18,17 @@ registry_path = Path("registry/sources.csv")
 runtime_path = Path("configs/runtime_sources.json")
 config = json.loads(runtime_path.read_text(encoding="utf-8"))
 registry = SourceRegistry.load(registry_path, runtime_path)
-known = {spec.source_id for spec in registry.list()}
+# Use ALL sources for validation, not just enabled ones — disabled sources still need
+# to reference valid source_ids and connectors.
+known = {spec.source_id for spec in registry._sources.values()}
 errors: list[str] = []
 
 for source_id in config.get("sources", {}):
     if source_id not in known:
         errors.append(f"runtime config references unknown source: {source_id}")
 
-for spec in registry.list():
+# Validate ALL sources, not just enabled ones.
+for spec in registry._sources.values():
     if spec.connector not in ALLOWED_CONNECTORS:
         errors.append(f"{spec.source_id}: unsupported connector {spec.connector}")
     if spec.auto_sync and not spec.public:

@@ -33,7 +33,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.7.0
+    image: ivoiredata:0.7.1
     restart: unless-stopped
     environment: *engine-env
     volumes: *engine-volumes
@@ -55,7 +55,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.7.0
+    image: ivoiredata:0.7.1
     restart: unless-stopped
     profiles: ["run"]
     command: ["ivoiredata", "scheduler", "--interval", "${IVOIREDATA_SCHEDULER_INTERVAL:-3600}"]
@@ -73,7 +73,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.7.0
+    image: ivoiredata:0.7.1
     profiles: ["sync"]
     command: ["ivoiredata", "scheduler", "--once"]
     environment: *engine-env

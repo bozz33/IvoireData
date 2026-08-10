@@ -21,6 +21,19 @@ def parser():
     s = sub.add_parser("sync"); s.add_argument("source_id", nargs="?"); s.add_argument("--due", action="store_true"); s.add_argument("--all-public", action="store_true"); s.add_argument("--force", action="store_true")
     s = sub.add_parser("scheduler"); s.add_argument("--interval", type=int, default=3600); s.add_argument("--once", action="store_true")
     s = sub.add_parser("query"); s.add_argument("source_id"); s.add_argument("sql"); s.add_argument("--max-rows", type=int, default=1000)
+    # Contrôle des sources
+    src = sub.add_parser("source"); src_subs = src.add_subparsers(dest="source_action", required=True)
+    src_subs.add_parser("enable").add_argument("source_id")
+    src_subs.add_parser("disable").add_argument("source_id")
+    src_subs.add_parser("auto").add_argument("source_id")
+    src_subs.add_parser("manual").add_argument("source_id")
+    s_refresh = src_subs.add_parser("refresh"); s_refresh.add_argument("source_id"); s_refresh.add_argument("hours", type=int)
+    # Contrôle global des mises à jour
+    upd = sub.add_parser("updates")
+    upd_subs = upd.add_subparsers(dest="updates_action", required=True)
+    upd_subs.add_parser("status")
+    upd_subs.add_parser("enable")
+    upd_subs.add_parser("disable")
     return p
 
 
@@ -94,8 +107,83 @@ def main(argv=None) -> int:
         run_forever(args.interval); return 0
     if args.command == "query":
         print(json.dumps(query_source_sql(args.source_id, args.sql, max_rows=args.max_rows), ensure_ascii=False, default=str, indent=2)); return 0
+    if args.command == "source":
+        return _source_control(engine, args)
+    if args.command == "updates":
+        return _updates_control(engine, args)
     return 2
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _source_control(engine: IvoireDataEngine, args) -> int:
+    """Applique les actions source enable/disable/auto/manual/refresh au runtime config."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    sid = args.source_id
+    spec = engine.registry.get(sid)  # valide l'existence
+    config_path = engine.settings.runtime_config_path
+    config = _json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    config.setdefault("sources", {})
+    entry = config["sources"].setdefault(sid, {})
+
+    action = args.source_action
+    changes: list[str] = []
+    if action == "enable":
+        entry["enabled"] = True; changes.append("enabled=true")
+    elif action == "disable":
+        entry["enabled"] = False; changes.append("enabled=false")
+    elif action == "auto":
+        entry["enabled"] = True; entry["auto_sync"] = True; changes.append("enabled=true, auto_sync=true")
+    elif action == "manual":
+        entry["enabled"] = True; entry["auto_sync"] = False; changes.append("enabled=true, auto_sync=false")
+    elif action == "refresh":
+        hours = int(getattr(args, "hours", 168))
+        entry["refresh_hours"] = hours; changes.append(f"refresh_hours={hours}")
+    else:
+        raise SystemExit(f"unknown source action: {action}")
+
+    config_path.write_text(_json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(_json.dumps({"source_id": sid, "action": action, "changes": changes}, ensure_ascii=False))
+    return 0
+
+
+def _updates_control(engine: IvoireDataEngine, args) -> int:
+    """Affiche ou modifie l'état global des mises à jour automatiques."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    config_path = engine.settings.runtime_config_path
+    config = _json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    config.setdefault("updates", {})
+    updates = config["updates"]
+
+    action = args.updates_action
+    if action == "status":
+        auto_enabled = bool(updates.get("automatic_enabled", True))
+        interval = int(updates.get("scheduler_interval_seconds", 3600))
+        specs = engine.registry.list()
+        auto_count = sum(1 for s in specs if s.auto_sync)
+        manual_count = sum(1 for s in specs if s.enabled and not s.auto_sync)
+        disabled_count = sum(1 for s in engine.registry._sources.values() if not s.enabled)
+        print(_json.dumps({
+            "automatic_enabled": auto_enabled,
+            "scheduler_interval_seconds": interval,
+            "automatic_sources": auto_count,
+            "manual_sources": manual_count,
+            "disabled_sources": disabled_count,
+        }, indent=2, ensure_ascii=False))
+    elif action == "enable":
+        updates["automatic_enabled"] = True
+        config_path.write_text(_json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(_json.dumps({"status": "Automatic updates enabled. Manual sync remains available."}, ensure_ascii=False))
+    elif action == "disable":
+        updates["automatic_enabled"] = False
+        config_path.write_text(_json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(_json.dumps({"status": "Automatic updates disabled. Manual sync remains available."}, ensure_ascii=False))
+    else:
+        raise SystemExit(f"unknown updates action: {action}")
+    return 0

@@ -9,7 +9,7 @@ from .query import query_source_sql
 from .ranking import rank_sources
 from .search import search_documents
 
-app = FastAPI(title="IvoireData Engine", version="0.7.0")
+app = FastAPI(title="IvoireData Engine", version="0.7.1")
 
 
 class SQLRequest(BaseModel):
@@ -20,7 +20,7 @@ class SQLRequest(BaseModel):
 @app.get("/health")
 def health():
     engine = IvoireDataEngine()
-    return {"status": "ok", "engine": "IvoireData", "version": "0.7.0", "storage": "local", "data_dir": str(engine.settings.data_dir)}
+    return {"status": "ok", "engine": "IvoireData", "version": "0.7.1", "storage": "local", "data_dir": str(engine.settings.data_dir)}
 
 
 @app.get("/sources")
