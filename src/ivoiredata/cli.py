@@ -12,12 +12,14 @@ from .scheduler import run_forever, run_once
 
 def parser():
     p = argparse.ArgumentParser(prog="ivoiredata", description="IvoireData local source collection and CI Gold delivery engine")
+    p.add_argument("--version", action="version", version="ivoiredata 0.8.2")
     sub = p.add_subparsers(dest="command", required=True)
     s = sub.add_parser("sources"); s.add_argument("--public", action="store_true"); s.add_argument("--all", action="store_true", help="include disabled sources")
     s = sub.add_parser("status"); s.add_argument("--public", action="store_true"); s.add_argument("--all", action="store_true", help="include disabled sources")
     sub.add_parser("coverage")
     sub.add_parser("coverage-audit")
     sub.add_parser("quality-audit")
+    s = sub.add_parser("upstreams", help="audit persistent upstream cache/version state"); s.add_argument("source_id", nargs="?")
     s = sub.add_parser("discoveries"); s.add_argument("--limit", type=int, default=100, help="maximum unmapped Data.gouv discoveries to display")
     s = sub.add_parser("ci-gold"); s.add_argument("--write", action="store_true", help="write qualification artifacts under data_lake/reports/ci-gold")
     sub.add_parser("inventory")
@@ -139,6 +141,7 @@ def main(argv=None) -> int:
     if args.command == "coverage": print(json.dumps(engine.coverage(), ensure_ascii=False, indent=2)); return 0
     if args.command == "coverage-audit": print(json.dumps(engine.coverage_audit(), ensure_ascii=False, indent=2)); return 0
     if args.command == "quality-audit": print(json.dumps(engine.quality_audit(), ensure_ascii=False, indent=2)); return 0
+    if args.command == "upstreams": print(json.dumps(engine.upstream_audit(args.source_id), ensure_ascii=False, indent=2, default=str)); return 0
     if args.command == "discoveries": print(json.dumps(data_gouv_discoveries(engine, limit=args.limit), ensure_ascii=False, indent=2)); return 0
     if args.command == "ci-gold":
         payload = engine.write_ci_gold() if args.write else engine.ci_gold()

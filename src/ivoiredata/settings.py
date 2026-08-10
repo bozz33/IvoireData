@@ -16,7 +16,7 @@ class Settings:
     runtime_config_path: Path = Path("configs/runtime_sources.json")
     ci_gold_runtime_path: Path = Path("configs/ci_gold_sources.json")
     ci_coverage_path: Path = Path("configs/ci_coverage.json")
-    user_agent: str = "IvoireData/0.8.1 (+https://github.com/bozz33/IvoireData)"
+    user_agent: str = "IvoireData/0.8.2 (+https://github.com/bozz33/IvoireData)"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -41,6 +41,11 @@ class Settings:
     def qualification_path(self) -> Path:
         configured = os.getenv("IVOIREDATA_CI_QUALIFICATION")
         return Path(configured) if configured else self.state_dir / "ci_gold_qualification.json"
+
+    @property
+    def upstream_state_path(self) -> Path:
+        configured = os.getenv("IVOIREDATA_UPSTREAM_STATE")
+        return Path(configured) if configured else self.state_dir / "upstreams.json"
 
     @property
     def registry_overlay_paths(self) -> list[Path]:

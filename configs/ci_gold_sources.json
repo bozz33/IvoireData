@@ -1,5 +1,8 @@
 {
   "sources": {
+    "civ_faostat": {"options":{"catalog_url":"https://bulks-faostat.fao.org/production/datasets_E.json","include_discontinued":false,"max_bytes_per_file":500000000,"max_new_bytes_per_run":1500000000}},
+    "civ_ilostat": {"options":{"base_url":"https://rplumber.ilo.org/data/indicator/","request_pause_seconds":0.05}},
+
     "civ_sgg_official_texts": {"connector":"public_web","refresh_hours":72,"auto_sync":true,"options":{"crawl":true,"max_pages":80,"primary_domain":"law_justice","secondary_domains":["governance","history"],"language":"fr","geographic_scope":"NATIONAL"}},
     "civ_dgbf_budget": {"connector":"public_web","refresh_hours":72,"auto_sync":true,"options":{"crawl":true,"max_pages":70,"verify_ssl":false,"primary_domain":"public_finance","secondary_domains":["economy","governance"],"language":"fr","geographic_scope":"NATIONAL"}},
     "civ_mesrs": {"connector":"public_web","refresh_hours":168,"auto_sync":true,"options":{"crawl":true,"max_pages":60,"primary_domain":"higher_education","secondary_domains":["research","education"],"language":"fr","geographic_scope":"NATIONAL"}},

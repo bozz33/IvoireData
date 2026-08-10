@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
 from .models import SyncResult
+from .state_io import atomic_write_json, load_json
 
 
 def _now() -> str:
@@ -32,22 +32,11 @@ class QualificationStore:
 
     def __init__(self, path: Path):
         self.path = path
-        self.data = self._load()
-
-    def _load(self) -> dict:
-        if not self.path.exists():
-            return {}
-        try:
-            value = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        return value if isinstance(value, dict) else {}
+        payload = load_json(path, {})
+        self.data = payload if isinstance(payload, dict) else {}
 
     def _save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        tmp.replace(self.path)
+        atomic_write_json(self.path, self.data)
 
     def start(self, baseline_sources: Iterable[str] | None = None) -> dict:
         now = _now()

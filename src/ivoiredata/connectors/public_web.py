@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
 from collections import deque
 from html.parser import HTMLParser
 from pathlib import Path
@@ -12,6 +11,8 @@ from urllib.robotparser import RobotFileParser
 from ..cleaning import clean_text
 from ..metadata import classify_from_base, title_from_text
 from ..snapshots import save_snapshot
+from ..state_io import atomic_write_json
+from ..upstream_state import UpstreamState
 
 _SKIP_EXTENSIONS = {
     ".7z", ".avi", ".bin", ".bmp", ".css", ".doc", ".docx", ".dta", ".exe", ".gif",
@@ -89,7 +90,7 @@ def _same_host_links(base_url: str, hrefs: list[str], *, metadata_only: bool = F
             if any(token in target for token in _METADATA_DENY_TOKENS):
                 continue
         out.append(candidate)
-    return out
+    return list(dict.fromkeys(out))
 
 
 def _robots_allowed(session, url: str, user_agent: str, cache: dict[str, RobotFileParser | None]) -> bool:
@@ -118,7 +119,7 @@ def _write_needs_ocr(snapshot: dict, *, source_id: str, source_url: str, sha256:
         return None
     sidecar = Path(str(local) + ".needs_ocr.json")
     try:
-        sidecar.write_text(json.dumps({
+        atomic_write_json(sidecar, {
             "status": "NEEDS_OCR",
             "source_id": source_id,
             "source_url": source_url,
@@ -126,7 +127,7 @@ def _write_needs_ocr(snapshot: dict, *, source_id: str, source_url: str, sha256:
             "extracted_text_chars": int(text_chars),
             "reason": "PDF contains too little extractable text; likely scanned/image-based or text extraction failed.",
             "automatic_ocr": False,
-        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        })
     except OSError:
         return None
     return str(sidecar)
@@ -136,7 +137,7 @@ def public_document_resource(
     *,
     source_id: str,
     url: str,
-    user_agent: str = "IvoireData/0.8.1",
+    user_agent: str = "IvoireData/0.8.2",
     force: bool = False,
     crawl: bool = False,
     max_pages: int = 1,
@@ -145,6 +146,7 @@ def public_document_resource(
     snapshot_dir: Path | None = None,
     verify_ssl: bool = True,
     metadata_base: dict | None = None,
+    upstream_state_path: Path | None = None,
 ):
     import dlt
     import requests
@@ -158,6 +160,7 @@ def public_document_resource(
     def resource():
         state = dlt.current.resource_state().setdefault("content_hashes", {})
         session = requests.Session()
+        upstream = UpstreamState(upstream_state_path) if upstream_state_path else None
         if not verify_ssl:
             session.verify = False
             try:
@@ -182,17 +185,43 @@ def public_document_resource(
                     continue
             if not _robots_allowed(session, current, user_agent, robots_cache):
                 continue
+
+            artifact = f"url:{current}"
+            cached = upstream.get(source_id, artifact) if upstream else {}
+            headers = {"User-Agent": user_agent}
+            if upstream:
+                headers.update(upstream.conditional_headers(source_id, artifact))
             try:
-                response = session.get(current, timeout=120, headers={"User-Agent": user_agent})
+                response = session.get(current, timeout=120, headers=headers)
+                if response.status_code == 304:
+                    fetched += 1
+                    if upstream:
+                        upstream.mark_http_unchanged(
+                            source_id, artifact, url=current,
+                            extra={"cached_links": list(cached.get("cached_links") or [])},
+                        )
+                    for candidate in list(cached.get("cached_links") or []):
+                        if candidate not in seen:
+                            queue.append(str(candidate))
+                    continue
                 response.raise_for_status()
             except requests.exceptions.RequestException as exc:
+                if upstream:
+                    upstream.mark_error(
+                        source_id, artifact, url=current, error=str(exc),
+                        status_code=getattr(getattr(exc, "response", None), "status_code", None),
+                        method="HTTP_DOCUMENT",
+                    )
                 if current == url:
                     raise
                 print(f"[public_web] {source_id}: lien ignoré {current} -> {exc}", flush=True)
                 continue
+
             fetched += 1
             raw = response.content
             if len(raw) > max_bytes:
+                if upstream:
+                    upstream.mark_error(source_id, artifact, url=current, error=f"payload too large: {len(raw)} > {max_bytes}", method="HTTP_DOCUMENT")
                 continue
             digest = hashlib.sha256(raw).hexdigest()
             ctype = response.headers.get("content-type", "").lower()
@@ -213,7 +242,10 @@ def public_document_resource(
 
             text = clean_text(text)
             extraction_status = "NEEDS_OCR" if is_pdf and len(text) < _MIN_PDF_TEXT_CHARS else "TEXT_EXTRACTED"
-            changed = force or state.get(current) != digest
+            # `force` means re-check now, not duplicate identical content. The network
+            # validator/SHA still decides whether this document version is new.
+            changed = state.get(current) != digest
+            snapshot = None
             if changed:
                 snapshot = save_snapshot(
                     snapshot_dir,
@@ -251,6 +283,27 @@ def public_document_resource(
                         **classified,
                     }
                 state[current] = digest
+
+            if upstream:
+                previous_local = cached.get("local_path")
+                local_path = snapshot.get("local_path") if snapshot else previous_local
+                upstream.mark_downloaded(
+                    source_id, artifact,
+                    url=current,
+                    signature=digest,
+                    sha256=digest,
+                    size_bytes=len(raw),
+                    etag=response.headers.get("etag"),
+                    last_modified=response.headers.get("last-modified"),
+                    method="HTTP_DOCUMENT",
+                    local_path=str(local_path) if local_path else None,
+                    extra={
+                        "cached_links": links,
+                        "content_type": ctype or None,
+                        "body_changed": changed,
+                    },
+                )
+
             for candidate in links:
                 if candidate not in seen:
                     queue.append(candidate)
