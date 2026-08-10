@@ -161,8 +161,12 @@ Gate de stabilité :
 
 - au moins 14 jours calendaires réels ;
 - au moins 14 cycles scheduler ;
+- au moins une synchronisation automatique réelle réussie ;
+- **chaque source publique active en mode AUTOMATIC doit avoir été réellement exercée au moins une fois pendant la fenêtre** ;
 - zéro cycle automatique avec erreur ;
 - zéro erreur de synchronisation enregistrée pendant la fenêtre.
+
+Les réveils du scheduler sans source due sont enregistrés comme cycles, mais ne suffisent jamais à eux seuls à qualifier le système.
 
 ## 9. Score CI Gold
 
@@ -193,6 +197,7 @@ no_active_sync_error
 rights_complete
 document_metadata_complete
 qualification_14_days
+automatic_sources_exercised
 catalog_present
 all_manifests_present
 ```
@@ -282,7 +287,7 @@ La phase CI est gelable lorsque :
 2. `ivoiredata ci-gold --write` produit les preuves ;
 3. la CI GitHub est verte ;
 4. le full sync local ne contient aucun `EMPTY`/`ERROR` actif critique ;
-5. la fenêtre de 14 jours est validée ;
+5. la fenêtre de 14 jours est validée et toutes les sources automatiques ont été exercées ;
 6. le snapshot/handoff downstream est reproductible.
 
 Tant que l’un de ces points est faux, la Côte d’Ivoire reste en **CI Gold Candidate** et non CI Gold final.
