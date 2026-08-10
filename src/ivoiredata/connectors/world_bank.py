@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from itertools import islice
 from pathlib import Path
 from typing import Any, Iterable
 
 from ..metadata import classify_from_base
 from ..snapshots import save_snapshot
+from ..state_io import atomic_write_json
+from ..upstream_state import UpstreamState
 
 API = "https://api.worldbank.org/v2"
 
@@ -27,7 +31,8 @@ def _data_rows(payload: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return {}, []
 
 
-def _paged(session, url: str, params: dict[str, Any], *, snapshot_dir: Path | None = None, source_id: str = "civ_worldbank_wdi", snapshot_name: str = "page") -> list[dict[str, Any]]:
+def _paged(session, url: str, params: dict[str, Any], *, snapshot_dir: Path | None = None,
+           source_id: str = "civ_worldbank_wdi", snapshot_name: str = "page") -> list[dict[str, Any]]:
     page = 1
     rows: list[dict[str, Any]] = []
     while True:
@@ -51,7 +56,8 @@ def _paged(session, url: str, params: dict[str, Any], *, snapshot_dir: Path | No
         page += 1
 
 
-def _fetch_country_indicators(session, country: str, codes: list[str], source: int, *, snapshot_dir, snapshot_name) -> list[dict[str, Any]]:
+def _fetch_country_indicators(session, country: str, codes: list[str], source: int, *, snapshot_dir,
+                              snapshot_name, ignored_codes: list[str]) -> list[dict[str, Any]]:
     import requests
 
     joined = ";".join(codes)
@@ -71,9 +77,15 @@ def _fetch_country_indicators(session, country: str, codes: list[str], source: i
         out: list[dict[str, Any]] = []
         for half_index, half in enumerate((codes[:mid], codes[mid:])):
             try:
-                out.extend(_fetch_country_indicators(session, country, half, source, snapshot_dir=snapshot_dir, snapshot_name=f"{snapshot_name}-h{half_index}"))
+                out.extend(_fetch_country_indicators(
+                    session, country, half, source,
+                    snapshot_dir=snapshot_dir,
+                    snapshot_name=f"{snapshot_name}-h{half_index}",
+                    ignored_codes=ignored_codes,
+                ))
             except requests.exceptions.HTTPError as exc2:
                 if getattr(getattr(exc2, "response", None), "status_code", None) == 400 and len(half) == 1:
+                    ignored_codes.append(half[0])
                     print(f"[world_bank_wdi] indicateur ignoré (400) : {half[0]}", flush=True)
                     continue
                 raise
@@ -97,15 +109,43 @@ def _indicator_classification(indicator: dict[str, Any], metadata_base: dict[str
     }
 
 
+def _source_version(session, source: int, snapshot_dir: Path | None) -> tuple[str, dict[str, Any], str]:
+    """Return the official World Bank `lastupdated` source signature."""
+    url = f"{API}/sources/{source}"
+    response = session.get(url, params={"format": "json", "per_page": 100}, timeout=120)
+    response.raise_for_status()
+    save_snapshot(
+        snapshot_dir,
+        source_id="civ_worldbank_wdi",
+        url=response.url,
+        content=response.content,
+        content_type=response.headers.get("content-type"),
+        name=f"source-{source}-metadata.json",
+    )
+    _, rows = _data_rows(response.json())
+    row = rows[0] if rows else {}
+    lastupdated = str(row.get("lastupdated") or row.get("lastUpdated") or "").strip()
+    signature_payload = {
+        "source": source,
+        "lastupdated": lastupdated,
+        "name": row.get("name"),
+        "code": row.get("code"),
+        "dataavailability": row.get("dataavailability"),
+    }
+    signature = hashlib.sha256(json.dumps(signature_payload, sort_keys=True, default=str).encode()).hexdigest()
+    return signature, row, response.url
+
+
 def world_bank_wdi_resource(
     *,
     country: str = "CIV",
     source: int = 2,
     indicator_limit: int | None = None,
     batch_size: int = 60,
-    user_agent: str = "IvoireData/0.8",
+    user_agent: str = "IvoireData/0.8.2",
     snapshot_dir: Path | None = None,
     metadata_base: dict[str, Any] | None = None,
+    upstream_state_path: Path | None = None,
 ):
     import dlt
     import requests
@@ -117,6 +157,29 @@ def world_bank_wdi_resource(
     def resource():
         session = requests.Session()
         session.headers.update({"User-Agent": user_agent, "Accept": "application/json"})
+        loaded = dlt.current.resource_state()
+        upstream = UpstreamState(upstream_state_path) if upstream_state_path else None
+        signature, source_meta, source_meta_url = _source_version(session, source, snapshot_dir)
+        prior_signature = loaded.get("source_signature")
+
+        stats: dict[str, Any] = {
+            "country": country,
+            "source": source,
+            "source_lastupdated": source_meta.get("lastupdated") or source_meta.get("lastUpdated"),
+            "unchanged": prior_signature == signature,
+            "indicators": 0,
+            "business_rows": 0,
+            "ignored_http400_indicators": [],
+        }
+
+        if prior_signature == signature:
+            if upstream:
+                upstream.mark_unchanged("civ_worldbank_wdi", f"source:{source}", signature=signature, url=source_meta_url, reason="WORLD_BANK_LASTUPDATED")
+            if snapshot_dir:
+                atomic_write_json(snapshot_dir / "worldbank_wdi_sync_stats.json", stats)
+            yield dlt.mark.with_table_name({"run_stats_json": json.dumps(stats, ensure_ascii=False), **stats}, "worldbank_wdi_sync_stats")
+            return
+
         indicators = _paged(
             session,
             f"{API}/indicator",
@@ -127,6 +190,7 @@ def world_bank_wdi_resource(
         if indicator_limit is not None:
             indicators = indicators[: max(0, int(indicator_limit))]
         codes = [str(row.get("id")) for row in indicators if row.get("id")]
+        stats["indicators"] = len(codes)
         classifications: dict[str, dict[str, Any]] = {}
         for indicator in indicators:
             row = dict(indicator)
@@ -137,12 +201,16 @@ def world_bank_wdi_resource(
             row["__ivoiredata_country"] = country
             row.update(classified)
             yield dlt.mark.with_table_name(row, "worldbank_wdi_indicators")
+
+        ignored_codes: list[str] = []
+        business_rows = 0
         for batch_index, codes_batch in enumerate(_chunks(codes, batch_size)):
             joined = ";".join(codes_batch)
             rows = _fetch_country_indicators(
                 session, country, codes_batch, source,
                 snapshot_dir=snapshot_dir,
                 snapshot_name=f"wdi-batch-{batch_index:04d}",
+                ignored_codes=ignored_codes,
             )
             for row in rows:
                 item = dict(row)
@@ -151,6 +219,21 @@ def world_bank_wdi_resource(
                 item["__ivoiredata_country"] = country
                 item["__ivoiredata_source_url"] = f"{API}/country/{country}/indicator/{code or joined}?source={source}"
                 item.update(classifications.get(code, {}))
+                business_rows += 1
                 yield dlt.mark.with_table_name(item, "worldbank_wdi")
+
+        loaded["source_signature"] = signature
+        stats["business_rows"] = business_rows
+        stats["ignored_http400_indicators"] = sorted(set(ignored_codes))
+        if upstream:
+            upstream.mark_downloaded(
+                "civ_worldbank_wdi", f"source:{source}",
+                url=source_meta_url, signature=signature, sha256=None, size_bytes=None,
+                method="WORLD_BANK_LASTUPDATED", rows=business_rows,
+                extra={"lastupdated": stats["source_lastupdated"], "ignored_indicators": stats["ignored_http400_indicators"]},
+            )
+        if snapshot_dir:
+            atomic_write_json(snapshot_dir / "worldbank_wdi_sync_stats.json", stats)
+        yield dlt.mark.with_table_name({"run_stats_json": json.dumps(stats, ensure_ascii=False), **stats}, "worldbank_wdi_sync_stats")
 
     return resource()
