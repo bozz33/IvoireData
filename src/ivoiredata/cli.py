@@ -110,7 +110,7 @@ def _updates_control(engine: IvoireDataEngine, args) -> int:
 def _qualification_control(engine: IvoireDataEngine, args) -> int:
     action = args.qualification_action
     if action == "status": payload = engine.qualification.status()
-    elif action in {"start", "reset"}: payload = engine.qualification.start()
+    elif action in {"start", "reset"}: payload = engine.start_qualification()
     else: raise SystemExit(f"unknown qualification action: {action}")
     print(json.dumps(payload, indent=2, ensure_ascii=False)); return 0
 
