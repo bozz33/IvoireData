@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 from collections import deque
 from html.parser import HTMLParser
 from pathlib import Path
@@ -19,6 +20,7 @@ _SKIP_EXTENSIONS = {
     ".svg", ".tar", ".webp", ".woff", ".woff2", ".xpt", ".zip",
 }
 _METADATA_DENY_TOKENS = ("download", "microdata", "datafile", "data-file", "get-microdata", "get_microdata")
+_MIN_PDF_TEXT_CHARS = 80
 
 
 class _HTMLTextAndLinks(HTMLParser):
@@ -110,11 +112,31 @@ def _robots_allowed(session, url: str, user_agent: str, cache: dict[str, RobotFi
     return True if parser is None else parser.can_fetch(user_agent, url)
 
 
+def _write_needs_ocr(snapshot: dict, *, source_id: str, source_url: str, sha256: str, text_chars: int) -> str | None:
+    local = snapshot.get("local_path")
+    if not local:
+        return None
+    sidecar = Path(str(local) + ".needs_ocr.json")
+    try:
+        sidecar.write_text(json.dumps({
+            "status": "NEEDS_OCR",
+            "source_id": source_id,
+            "source_url": source_url,
+            "content_sha256": sha256,
+            "extracted_text_chars": int(text_chars),
+            "reason": "PDF contains too little extractable text; likely scanned/image-based or text extraction failed.",
+            "automatic_ocr": False,
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        return None
+    return str(sidecar)
+
+
 def public_document_resource(
     *,
     source_id: str,
     url: str,
-    user_agent: str = "IvoireData/0.8",
+    user_agent: str = "IvoireData/0.8.1",
     force: bool = False,
     crawl: bool = False,
     max_pages: int = 1,
@@ -176,7 +198,8 @@ def public_document_resource(
             ctype = response.headers.get("content-type", "").lower()
             text = ""
             links: list[str] = []
-            if "pdf" in ctype or current.lower().split("?", 1)[0].endswith(".pdf"):
+            is_pdf = "pdf" in ctype or current.lower().split("?", 1)[0].endswith(".pdf")
+            if is_pdf:
                 reader = PdfReader(io.BytesIO(raw))
                 text = "\n".join((page.extract_text() or "") for page in reader.pages)
             elif "html" in ctype or raw.lstrip().startswith(b"<"):
@@ -188,8 +211,9 @@ def public_document_resource(
             else:
                 continue
 
+            text = clean_text(text)
+            extraction_status = "NEEDS_OCR" if is_pdf and len(text) < _MIN_PDF_TEXT_CHARS else "TEXT_EXTRACTED"
             changed = force or state.get(current) != digest
-            snapshot = {}
             if changed:
                 snapshot = save_snapshot(
                     snapshot_dir,
@@ -198,6 +222,15 @@ def public_document_resource(
                     content=raw,
                     content_type=ctype or None,
                 )
+                needs_ocr_sidecar = None
+                if extraction_status == "NEEDS_OCR":
+                    needs_ocr_sidecar = _write_needs_ocr(
+                        snapshot,
+                        source_id=source_id,
+                        source_url=current,
+                        sha256=digest,
+                        text_chars=len(text),
+                    )
                 classified = classify_from_base(base, current, text)
                 document_title = title_from_text(text)
                 for idx, chunk in enumerate(chunk_text(text)):
@@ -208,9 +241,12 @@ def public_document_resource(
                         "source_url": current,
                         "document_title": document_title,
                         "content_sha256": digest,
+                        "content_type": ctype or None,
                         "local_snapshot": snapshot.get("local_path"),
                         "chunk_index": idx,
                         "metadata_only": metadata_only,
+                        "extraction_status": extraction_status,
+                        "needs_ocr_sidecar": needs_ocr_sidecar,
                         "text": chunk,
                         **classified,
                     }
