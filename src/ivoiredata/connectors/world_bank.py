@@ -57,9 +57,11 @@ def _paged(session, url: str, params: dict[str, Any], *, snapshot_dir: Path | No
 
 
 def _fetch_country_indicators(session, country: str, codes: list[str], source: int, *, snapshot_dir,
-                              snapshot_name, ignored_codes: list[str]) -> list[dict[str, Any]]:
+                              snapshot_name, ignored_codes: list[str] | None = None) -> list[dict[str, Any]]:
     import requests
 
+    if ignored_codes is None:
+        ignored_codes = []
     joined = ";".join(codes)
     try:
         return _paged(
