@@ -24,8 +24,10 @@ def _parse(value: str | None) -> datetime | None:
 class QualificationStore:
     """Persistent CI Gold stability qualification ledger.
 
-    Only automatic scheduler cycles are recorded. Manual syncs are deliberately
-    excluded so repair/test runs cannot falsify the stability window.
+    Automatic scheduler cycles are the only cycles that count toward the
+    14-day stability window. A clean preflight/full-sync may be snapshotted as
+    a baseline so long refresh intervals do not make a 14-day qualification
+    mathematically impossible.
     """
 
     def __init__(self, path: Path):
@@ -47,10 +49,13 @@ class QualificationStore:
         tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         tmp.replace(self.path)
 
-    def start(self) -> dict:
+    def start(self, baseline_sources: Iterable[str] | None = None) -> dict:
         now = _now()
+        baseline = sorted({str(source_id) for source_id in (baseline_sources or []) if source_id})
         self.data = {
             "started_at": now,
+            "baseline_at": now,
+            "baseline_sources": baseline,
             "last_cycle_at": None,
             "cycles_total": 0,
             "cycles_with_errors": 0,
@@ -64,8 +69,8 @@ class QualificationStore:
         self._save()
         return self.status()
 
-    def reset(self) -> dict:
-        return self.start()
+    def reset(self, baseline_sources: Iterable[str] | None = None) -> dict:
+        return self.start(baseline_sources=baseline_sources)
 
     def record_cycle(self, results: Iterable[SyncResult]) -> dict:
         if not self.data.get("started_at"):
@@ -102,6 +107,7 @@ class QualificationStore:
         errors = int(self.data.get("sync_errors", 0))
         source_attempts = {str(k): int(v) for k, v in (self.data.get("source_attempts") or {}).items()}
         source_errors = {str(k): int(v) for k, v in (self.data.get("source_errors") or {}).items()}
+        baseline_sources = sorted({str(x) for x in (self.data.get("baseline_sources") or []) if x})
         qualified = bool(
             started
             and elapsed_days >= 14
@@ -113,6 +119,9 @@ class QualificationStore:
         )
         return {
             "started_at": self.data.get("started_at"),
+            "baseline_at": self.data.get("baseline_at"),
+            "baseline_sources": baseline_sources,
+            "baseline_source_count": len(baseline_sources),
             "last_cycle_at": self.data.get("last_cycle_at"),
             "elapsed_days": round(elapsed_days, 3),
             "cycles_total": cycles,
