@@ -144,6 +144,7 @@ Endpoints principaux : `/health`, `/sources`, `/status`, `/coverage`, `/audit`, 
 
 | Document | Rôle |
 |---|---|
+| [`docs/USAGE_GUIDE.md`](docs/USAGE_GUIDE.md) | guide complet : installation, Docker, sync, audit, API, sauvegarde, diagnostic et handoff |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | architecture et flux |
 | [`docs/ENGINE.md`](docs/ENGINE.md) | moteur interne |
 | [`docs/CONNECTORS.md`](docs/CONNECTORS.md) | connecteurs |
