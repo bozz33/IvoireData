@@ -1,176 +1,143 @@
-# IvoireData — spécification CI Gold
+# IvoireData — spécification CI Gold v0.8.1
 
-## 1. Périmètre
+## Périmètre
 
-CI Gold concerne **uniquement la Côte d’Ivoire**. Aucune extension pays/région n’est autorisée tant que les gates CI Gold ne sont pas satisfaits.
-
-CI Gold ne signifie pas « toutes les informations existant dans le pays ». Il signifie que chaque grande famille nationale prioritaire a été **identifiée, qualifiée et mesurée** avec un statut explicite :
-
-- `COVERED` ;
-- `PARTIAL` ;
-- `CONTROLLED` ;
-- `UNAVAILABLE` ;
-- `UNRESOLVED` ;
-- `MISSING`.
-
-La matrice machine-readable est `configs/ci_coverage.json`.
-
-## 2. Contrat de métadonnées
-
-À partir de v0.8.0, le manifest est en schema v3. Chaque source possède une section `metadata` avec au minimum :
+CI Gold concerne **uniquement la Côte d’Ivoire**. Il ne signifie pas « toutes les informations existant dans le pays », mais que toutes les grandes familles nationales prioritaires sont identifiées, évaluées et suivies par un statut explicite :
 
 ```text
-country_code
-country_name
+COVERED | PARTIAL | CONTROLLED | UNAVAILABLE | UNRESOLVED | MISSING
+```
+
+La source de vérité machine-readable est `configs/ci_coverage.json` (matrice v2).
+
+## Registres et configuration
+
+```text
+registry/sources.csv
+registry/ci_gold_completeness.csv
+configs/runtime_sources.json
+configs/ci_gold_sources.json
+.ivoiredata/state/runtime_overrides.json
+```
+
+Ordre de priorité : base → overlays CI Gold versionnés → overrides utilisateur persistants.
+
+## Métadonnées nationales
+
+Manifest/catalog schema v3. Les documents et sources portent notamment :
+
+```text
+country_code=CIV
+country_name=Côte d'Ivoire
 source_id
 provider
 source_domain
 primary_domain
 secondary_domains_json
 language
-geographic_scope
 document_type
+geographic_scope
 rights_tier
 access_tier
 classification_status
 classification_confidence
+retrieved_at
 ```
 
-Pour IvoireData CI :
+Les sources spécialisées gardent leur domaine canonique. Les sources multidomaines sont classées avec des règles déterministes et conservatrices ; aucune classification LLM n’est nécessaire au chemin normal.
 
-```text
-country_code = CIV
-country_name = Côte d'Ivoire
-```
+## Couverture nationale v2
 
-Les documents `public_web` portent ces champs directement dans leurs lignes Parquet. Les sources multidomaines Data.gouv.ci et WDI reçoivent une classification déterministe au niveau dataset/indicateur.
+La matrice v2 dépasse 50 familles et inclut notamment : institutions de la République, finances publiques, droit/justice, élections, décentralisation, fonction publique, anti-corruption, population, migration, emploi, pauvreté, genre, jeunesse, handicap, économie, industrie, investissement, agriculture, santé, éducation, enseignement supérieur, recherche, télécoms, numérique, cybersécurité publique, innovation, médias, mines, hydrocarbures, électricité, environnement, biodiversité, géographie, foncier, eau, transport, routes, protection civile, défense, diplomatie, tourisme, culture, sport, histoire, langues, nouchi/français ivoirien et gastronomie.
 
-## 3. Classification
+Les corpus linguistiques/culturels soumis à droits peuvent rester `CONTROLLED`. Cela vaut mieux qu’une ingestion illégitime.
 
-Ordre de décision :
+## Sources institutionnelles complétées
 
-1. domaine explicite de la source ;
-2. configuration source ;
-3. métadonnées upstream ;
-4. titre/description/URL ;
-5. règles lexicales déterministes ;
-6. `multidomain`/`PARTIAL` en cas d’incertitude.
+En plus du socle v0.8.0, v0.8.1 ajoute notamment :
 
-Aucun LLM n’est nécessaire au chemin normal. Il vaut mieux conserver `UNKNOWN`/`PARTIAL` que fabriquer une classification.
+- Femme/Famille/Enfant ;
+- Jeunesse ;
+- Commerce/Industrie ;
+- CEPICI ;
+- ministère du Numérique ;
+- Intérieur/Décentralisation ;
+- ONEF ;
+- Fonction publique ;
+- HABG ;
+- Défense ;
+- Assemblée nationale ;
+- Sénat ;
+- Conseil constitutionnel ;
+- Cour des comptes ;
+- CESEC ;
+- Présidence ;
+- Diplomatie ;
+- Solidarité/Pauvreté ;
+- MIRAH.
 
-## 4. Types documentaires
-
-Types initiaux :
-
-```text
-LAW
-DECREE
-ORDINANCE
-REGULATION
-REPORT
-STATISTICAL_REPORT
-DATASET
-BUDGET
-STRATEGY
-PLAN
-GUIDE
-PROCEDURE
-FORM
-PRESS_RELEASE
-DIRECTORY
-MAP
-RESEARCH
-OTHER
-```
-
-## 5. Sources institutionnelles CI Gold
-
-La v0.8.0 ajoute notamment :
-
-- `civ_sgg_official_texts` — SGG, textes officiels / Journal officiel ;
-- `civ_dgbf_budget` — DGBF, budget et lois de finances ;
-- `civ_mesrs` — enseignement supérieur / recherche ;
-- `civ_cei` — élections et résultats ;
-- `civ_ageroute` — routes ;
-- `civ_anare` — électricité ;
-- `civ_culture` — culture/patrimoine ;
-- `civ_tourism` — tourisme ;
-- `civ_communication` — communication/médias ;
-- `civ_sports` — sport ;
-- `civ_gouv_portal` — portail du Gouvernement.
-
-Ces sources sont définies dans le registre et configurées dans `configs/ci_gold_sources.json`.
-
-## 6. Audit de couverture
+## Découverte de nouvelles ressources
 
 ```bash
+ivoiredata discoveries
+```
+
+compare le catalogue Data.gouv.ci réellement synchronisé avec les mappings explicites du registre.
+
+Workflow obligatoire :
+
+```text
+discover
+→ review domain / rights
+→ register / configure
+→ sync
+```
+
+Une découverte n’est **jamais auto-ingérée**.
+
+## PDF scannés
+
+Le connecteur document distingue les PDF textuels des PDF probablement scannés/text-poor.
+
+Pour ces derniers :
+
+```text
+extraction_status=NEEDS_OCR
+```
+
+Le PDF brut reste conservé et un sidecar `*.needs_ocr.json` est créé. `automatic_ocr=false` : IvoireData ne lance pas automatiquement une OCR coûteuse ou risquée.
+
+## Audits
+
+```bash
+ivoiredata audit
 ivoiredata coverage-audit
-```
-
-L’audit compare :
-
-- domaines attendus ;
-- sources attendues ;
-- présence au registre ;
-- activation ;
-- politique de droits ;
-- livraison réellement non vide.
-
-Un domaine P0 `MISSING` ou `UNRESOLVED` bloque CI Gold.
-
-## 7. Audit qualité
-
-```bash
 ivoiredata quality-audit
+ivoiredata discoveries
+ivoiredata ci-gold
 ```
 
-Contrôles principaux :
+`quality-audit` vérifie notamment : manifest, schema v3, métadonnées CIV, droits, `EMPTY/ERROR`, colonnes documentaires, fichiers zéro octet et documents `NEEDS_OCR`.
 
-- manifest présent ;
-- métadonnées nationales présentes ;
-- droits présents ;
-- aucune livraison `EMPTY` critique ;
-- aucun `SYNC_ERROR` critique ;
-- colonnes documentaires CI Gold présentes sur les sources Web après migration.
-
-Les anciennes tables v0.7.x restent lisibles, mais l’audit les signale jusqu’à resynchronisation v0.8.0.
-
-## 8. Qualification de stabilité
-
-La qualification est persistée dans :
-
-```text
-.ivoiredata/state/ci_gold_qualification.json
-```
-
-Démarrage :
+## Qualification de stabilité
 
 ```bash
 ivoiredata qualification start
-```
-
-État :
-
-```bash
 ivoiredata qualification status
 ```
 
-Seuls les cycles automatiques du scheduler sont enregistrés. Les sync manuels ne peuvent pas artificiellement valider la stabilité.
+Seuls les cycles automatiques comptent. Les sync manuels ne qualifient jamais artificiellement le système.
 
-Gate de stabilité :
+Conditions minimales :
 
-- au moins 14 jours calendaires réels ;
-- au moins 14 cycles scheduler ;
-- au moins une synchronisation automatique réelle réussie ;
-- **chaque source publique active en mode AUTOMATIC doit avoir été réellement exercée au moins une fois pendant la fenêtre** ;
+- >=14 jours calendaires réels ;
+- >=14 cycles scheduler ;
+- au moins une vraie synchronisation automatique réussie ;
+- toutes les sources publiques actives en mode AUTOMATIC exercées au moins une fois ;
 - zéro cycle automatique avec erreur ;
-- zéro erreur de synchronisation enregistrée pendant la fenêtre.
+- zéro sync automatique en erreur.
 
-Les réveils du scheduler sans source due sont enregistrés comme cycles, mais ne suffisent jamais à eux seuls à qualifier le système.
-
-## 9. Score CI Gold
-
-`ivoiredata ci-gold` calcule un score interne :
+## Score
 
 | Composante | Poids |
 |---|---:|
@@ -182,11 +149,9 @@ Les réveils du scheduler sans source due sont enregistrés comme cycles, mais n
 | Droits | 10 % |
 | Handoff | 5 % |
 
-Le score n’est pas une vérité statistique ; il sert à piloter la qualification.
+Le score est un outil interne. Les gates obligatoires ne peuvent pas être contournés par un bon score.
 
-## 10. Gates obligatoires
-
-CI Gold est `approved=true` uniquement si **tous** les gates sont vrais :
+## Gates obligatoires
 
 ```text
 score_at_least_95
@@ -196,98 +161,50 @@ no_active_empty
 no_active_sync_error
 rights_complete
 document_metadata_complete
+manifest_v3_complete
 qualification_14_days
 automatic_sources_exercised
 catalog_present
 all_manifests_present
 ```
 
-Un bon score ne permet jamais de contourner un gate obligatoire.
-
-## 11. Rapport de preuve
+## Rapport de preuve
 
 ```bash
 ivoiredata ci-gold --write
 ```
 
-Produit :
+Produit `data_lake/reports/ci-gold/` avec audit, couverture, qualité, qualification, sources et rapport final.
 
-```text
-data_lake/reports/ci-gold/
-├── audit.json
-├── coverage.json
-├── quality.json
-├── qualification.json
-├── sources.json
-├── ci-gold-report.json
-└── ci-gold-report.md
-```
-
-Ces fichiers décrivent l’état du data lake ; ils ne remplacent pas les données elles-mêmes.
-
-## 12. Procédure de migration v0.7.2 → v0.8.0
+## Migration vers v0.8.1
 
 ```bash
 git pull
 docker compose build
 docker compose --profile run up -d
-```
 
-Puis régénérer les données/manifests :
-
-```bash
 docker compose --profile sync run --rm sync-once \
   sh -c "ivoiredata sync --all-public --force"
-```
 
-Contrôles :
-
-```bash
 docker compose exec api ivoiredata audit
 docker compose exec api ivoiredata coverage-audit
 docker compose exec api ivoiredata quality-audit
+docker compose exec api ivoiredata discoveries
 ```
 
-Une fois les anomalies initiales corrigées :
+Ne démarrer/réinitialiser la qualification qu’après correction des problèmes de full sync.
 
-```bash
-docker compose exec api ivoiredata qualification start
-```
+## Definition of Done
 
-Le scheduler doit rester actif pendant toute la fenêtre de qualification.
+La Côte d’Ivoire peut être appelée **CI Gold final** seulement lorsque :
 
-## 13. Droits
+1. le code/CI est vert ;
+2. le data lake local a été entièrement migré v0.8.1 ;
+3. aucun P0 actif n’est `EMPTY/ERROR/MISSING/UNRESOLVED` ;
+4. les droits et manifests v3 sont complets ;
+5. la qualification réelle est validée ;
+6. `ivoiredata ci-gold` retourne `approved=true` ;
+7. `ivoiredata ci-gold --write` produit les preuves ;
+8. le snapshot/handoff downstream est reproductible.
 
-Les tiers restent :
-
-- A : réutilisable/redistribuable ;
-- B : conditions spécifiques à la source ;
-- C : contenu public collectable localement avec contraintes de réutilisation ;
-- D : restreint/autorisation requise.
-
-Aucun accès contrôlé ne doit être contourné. Une catégorie peut être `CONTROLLED` et néanmoins être considérée comme correctement **évaluée** pour la matrice, sans que les payloads interdits soient ingérés.
-
-## 14. Langues / nouchi / œuvres culturelles
-
-La couverture linguistique et culturelle doit rester juridiquement propre. CI Gold n’autorise pas :
-
-- aspiration massive de livres protégés ;
-- paroles de chansons ;
-- corpus privés ;
-- données nominatives ;
-- contournement de restrictions.
-
-Ces familles peuvent rester `CONTROLLED` jusqu’à obtention de corpus ouverts, licenciés ou créés pour le projet.
-
-## 15. Définition de Done
-
-La phase CI est gelable lorsque :
-
-1. `ivoiredata ci-gold` renvoie `approved=true` ;
-2. `ivoiredata ci-gold --write` produit les preuves ;
-3. la CI GitHub est verte ;
-4. le full sync local ne contient aucun `EMPTY`/`ERROR` actif critique ;
-5. la fenêtre de 14 jours est validée et toutes les sources automatiques ont été exercées ;
-6. le snapshot/handoff downstream est reproductible.
-
-Tant que l’un de ces points est faux, la Côte d’Ivoire reste en **CI Gold Candidate** et non CI Gold final.
+Avant cela, le statut correct est **CI Gold Candidate**.

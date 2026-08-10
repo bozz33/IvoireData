@@ -21,34 +21,15 @@ _COVERAGE_WEIGHTS = {
 }
 _PRIORITY_WEIGHTS = {"P0": 3.0, "P1": 2.0, "P2": 1.0}
 _REQUIRED_MANIFEST_METADATA = (
-    "country_code",
-    "country_name",
-    "source_id",
-    "provider",
-    "source_domain",
-    "primary_domain",
-    "language",
-    "geographic_scope",
-    "rights_tier",
-    "access_tier",
-    "classification_status",
+    "country_code", "country_name", "source_id", "provider", "source_domain",
+    "primary_domain", "language", "geographic_scope", "rights_tier",
+    "access_tier", "classification_status",
 )
 _REQUIRED_DOCUMENT_COLUMNS = {
-    "country_code",
-    "country_name",
-    "source_id",
-    "provider",
-    "source_domain",
-    "primary_domain",
-    "secondary_domains_json",
-    "language",
-    "document_type",
-    "geographic_scope",
-    "rights_tier",
-    "access_tier",
-    "classification_status",
-    "classification_confidence",
-    "retrieved_at",
+    "country_code", "country_name", "source_id", "provider", "source_domain",
+    "primary_domain", "secondary_domains_json", "language", "document_type",
+    "geographic_scope", "rights_tier", "access_tier", "classification_status",
+    "classification_confidence", "retrieved_at", "content_type", "extraction_status",
 }
 
 
@@ -82,6 +63,25 @@ def _parquet_columns(path: Path) -> set[str]:
             continue
         columns.update(schema.names)
     return columns
+
+
+def _zero_byte_files(root: Path) -> list[str]:
+    rows: list[str] = []
+    if not root.exists():
+        return rows
+    for file in root.rglob("*"):
+        try:
+            if file.is_file() and file.stat().st_size == 0:
+                rows.append(str(file))
+        except OSError:
+            continue
+    return rows
+
+
+def _needs_ocr_files(root: Path) -> list[str]:
+    if not root.exists():
+        return []
+    return sorted(str(path) for path in root.rglob("*.needs_ocr.json") if path.is_file())
 
 
 def coverage_audit(engine: IvoireDataEngine) -> dict[str, Any]:
@@ -169,8 +169,12 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
     audit_map = {row["source_id"]: row for row in engine.audit(public_only=True)["rows"]}
     document_sources = 0
     document_schema_complete = 0
+    total_needs_ocr = 0
+    total_zero_byte = 0
+    legacy_manifests = 0
 
     for spec in active:
+        paths = source_paths(engine.settings, spec)
         manifest = _manifest(engine, spec)
         metadata = manifest.get("metadata", {}) if isinstance(manifest.get("metadata"), dict) else {}
         missing_meta = [key for key in _REQUIRED_MANIFEST_METADATA if not metadata.get(key)]
@@ -182,6 +186,9 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
         source_issues: list[str] = []
         if not manifest:
             source_issues.append("MANIFEST_MISSING")
+        elif int(manifest.get("schema_version") or 0) < 3:
+            source_issues.append("MANIFEST_SCHEMA_LEGACY")
+            legacy_manifests += 1
         if missing_meta:
             source_issues.append("MANIFEST_METADATA_INCOMPLETE")
         if delivery_status == "EMPTY":
@@ -191,19 +198,30 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
         if not spec.rights_tier or not spec.access_tier:
             source_issues.append("RIGHTS_METADATA_MISSING")
 
+        zero_byte = _zero_byte_files(paths["root"])
+        needs_ocr = _needs_ocr_files(paths["documents"])
+        total_zero_byte += len(zero_byte)
+        total_needs_ocr += len(needs_ocr)
+        if zero_byte:
+            source_issues.append("ZERO_BYTE_FILES")
+        if needs_ocr:
+            source_issues.append("DOCUMENTS_NEED_OCR")
+
         missing_columns: list[str] = []
         if spec.connector == "public_web" and delivery_status != "EMPTY":
             document_sources += 1
-            columns = _parquet_columns(source_paths(engine.settings, spec)["tables"])
+            columns = _parquet_columns(paths["tables"])
             missing_columns = sorted(_REQUIRED_DOCUMENT_COLUMNS - columns)
             if not missing_columns:
                 document_schema_complete += 1
             else:
                 source_issues.append("DOCUMENT_METADATA_COLUMNS_INCOMPLETE")
 
-        critical = spec.priority.upper() == "P0" and any(
-            issue in source_issues for issue in ("MANIFEST_MISSING", "EMPTY_DELIVERY", "SYNC_ERROR", "RIGHTS_METADATA_MISSING")
-        )
+        critical_codes = {
+            "MANIFEST_MISSING", "MANIFEST_SCHEMA_LEGACY", "EMPTY_DELIVERY",
+            "SYNC_ERROR", "RIGHTS_METADATA_MISSING",
+        }
+        critical = spec.priority.upper() == "P0" and any(issue in critical_codes for issue in source_issues)
         if critical:
             severity = "CRITICAL"
         elif source_issues:
@@ -217,8 +235,12 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
             "connector": spec.connector,
             "delivery_status": delivery_status,
             "sync_status": sync_status,
+            "manifest_schema_version": int(manifest.get("schema_version") or 0) if manifest else None,
             "missing_manifest_metadata": missing_meta,
             "missing_document_columns": missing_columns,
+            "needs_ocr_documents": len(needs_ocr),
+            "needs_ocr_sidecars": needs_ocr[:20],
+            "zero_byte_files": len(zero_byte),
             "severity": severity,
         })
 
@@ -231,6 +253,10 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
             "active_public_sources": len(active),
             "critical_issues": critical_count,
             "warnings": warning_count,
+            "legacy_manifests": legacy_manifests,
+            "zero_byte_files": total_zero_byte,
+            "needs_ocr_documents": total_needs_ocr,
+            "automatic_ocr": False,
             "document_sources": document_sources,
             "document_schema_complete": document_schema_complete,
             "document_schema_completeness_pct": round(schema_ratio * 100, 2),
@@ -305,6 +331,7 @@ def ci_gold_report(engine: IvoireDataEngine) -> dict[str, Any]:
         "no_active_sync_error": non_error == active,
         "rights_complete": rights_ok == active,
         "document_metadata_complete": quality["summary"]["document_schema_completeness_pct"] >= 99.0,
+        "manifest_v3_complete": quality["summary"]["legacy_manifests"] == 0,
         "qualification_14_days": qualification["qualified"],
         "automatic_sources_exercised": automatic_sources_exercised,
         "catalog_present": catalog_ok,
@@ -353,7 +380,8 @@ def write_ci_gold_report(engine: IvoireDataEngine) -> dict[str, Any]:
         f"- Approved: **{'YES' if report['approved'] else 'NO'}**\n"
         f"- Coverage: **{report['coverage']['summary']['coverage_score']}/100**\n"
         f"- Qualification elapsed: **{report['qualification']['elapsed_days']} days**\n"
-        f"- Automatic sources exercised: **{report['stability_coverage']['automatic_sources_exercised']}/{report['stability_coverage']['automatic_sources']}**\n\n"
+        f"- Automatic sources exercised: **{report['stability_coverage']['automatic_sources_exercised']}/{report['stability_coverage']['automatic_sources']}**\n"
+        f"- NEEDS_OCR documents: **{report['quality']['summary']['needs_ocr_documents']}**\n\n"
         "## Gates\n\n" + gates + "\n"
     )
     (root / "ci-gold-report.md").write_text(markdown, encoding="utf-8")

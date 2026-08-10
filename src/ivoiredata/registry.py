@@ -21,6 +21,29 @@ def infer_connector(spec: SourceSpec) -> str:
     return "public_web"
 
 
+def _load_registry_csv(path: Path, sources: dict[str, SourceSpec]) -> None:
+    if not path.exists():
+        return
+    with path.open(encoding="utf-8", newline="") as f:
+        for row in csv.DictReader(f):
+            source_id = (row.get("source_id") or "").strip()
+            if not source_id:
+                continue
+            spec = SourceSpec(
+                source_id=source_id,
+                title=row["title"],
+                domain=row["domain"],
+                provider=row["provider"],
+                source_url=row["source_url"],
+                rights_tier=row["rights_tier"],
+                access_tier=row["access_tier"],
+                priority=row["priority"],
+            )
+            if source_id in sources:
+                raise ValueError(f"duplicate source_id across registry files: {source_id}")
+            sources[source_id] = spec
+
+
 class SourceRegistry:
     def __init__(self, sources: dict[str, SourceSpec]):
         self._sources = sources
@@ -32,21 +55,23 @@ class SourceRegistry:
         runtime_path: Path | None = None,
         runtime_overrides_path: Path | None = None,
         runtime_overlay_paths: list[Path] | None = None,
+        registry_overlay_paths: list[Path] | None = None,
     ) -> "SourceRegistry":
         sources: dict[str, SourceSpec] = {}
-        with csv_path.open(encoding="utf-8", newline="") as f:
-            for row in csv.DictReader(f):
-                spec = SourceSpec(
-                    source_id=row["source_id"],
-                    title=row["title"],
-                    domain=row["domain"],
-                    provider=row["provider"],
-                    source_url=row["source_url"],
-                    rights_tier=row["rights_tier"],
-                    access_tier=row["access_tier"],
-                    priority=row["priority"],
-                )
-                sources[spec.source_id] = spec
+        _load_registry_csv(csv_path, sources)
+
+        # Standard packaged overlays are discovered automatically so older call sites
+        # cannot silently ignore CI Gold additions. Custom/tmp registries are unaffected
+        # unless the sibling overlay files actually exist.
+        if registry_overlay_paths is None:
+            candidate = csv_path.with_name("ci_gold_completeness.csv")
+            registry_overlay_paths = [candidate] if candidate.exists() else []
+        for overlay in registry_overlay_paths:
+            _load_registry_csv(overlay, sources)
+
+        if runtime_overlay_paths is None and runtime_path is not None:
+            candidate = runtime_path.with_name("ci_gold_sources.json")
+            runtime_overlay_paths = [candidate] if candidate.exists() else []
 
         config = load_runtime_config(runtime_path, runtime_overrides_path, runtime_overlay_paths)
         defaults = config.get("defaults", {})

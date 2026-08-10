@@ -4,19 +4,21 @@ import argparse
 import json
 
 from .delivery import inventory, source_paths
+from .discoveries import data_gouv_discoveries
 from .engine import IvoireDataEngine
 from .query import query_source_sql
 from .scheduler import run_forever, run_once
 
 
 def parser():
-    p = argparse.ArgumentParser(prog="ivoiredata", description="IvoireData local source collection and domain delivery engine")
+    p = argparse.ArgumentParser(prog="ivoiredata", description="IvoireData local source collection and CI Gold delivery engine")
     sub = p.add_subparsers(dest="command", required=True)
     s = sub.add_parser("sources"); s.add_argument("--public", action="store_true"); s.add_argument("--all", action="store_true", help="include disabled sources")
     s = sub.add_parser("status"); s.add_argument("--public", action="store_true"); s.add_argument("--all", action="store_true", help="include disabled sources")
     sub.add_parser("coverage")
     sub.add_parser("coverage-audit")
     sub.add_parser("quality-audit")
+    s = sub.add_parser("discoveries"); s.add_argument("--limit", type=int, default=100, help="maximum unmapped Data.gouv discoveries to display")
     s = sub.add_parser("ci-gold"); s.add_argument("--write", action="store_true", help="write qualification artifacts under data_lake/reports/ci-gold")
     sub.add_parser("inventory")
     s = sub.add_parser("audit"); s.add_argument("--all", action="store_true", help="include controlled/manual sources")
@@ -76,18 +78,12 @@ def _source_control(engine: IvoireDataEngine, args) -> int:
         print(json.dumps(engine.runtime.source_status(engine.registry, sid), indent=2, ensure_ascii=False))
         return 0
     try:
-        if action == "enable":
-            engine.runtime.set_source(sid, enabled=True)
-        elif action == "disable":
-            engine.runtime.set_source(sid, enabled=False)
-        elif action == "auto":
-            engine.runtime.set_source(sid, enabled=True, auto_sync=True)
-        elif action == "manual":
-            engine.runtime.set_source(sid, enabled=True, auto_sync=False)
-        elif action == "refresh":
-            engine.runtime.set_source(sid, refresh_hours=int(args.hours))
-        else:
-            raise SystemExit(f"unknown source action: {action}")
+        if action == "enable": engine.runtime.set_source(sid, enabled=True)
+        elif action == "disable": engine.runtime.set_source(sid, enabled=False)
+        elif action == "auto": engine.runtime.set_source(sid, enabled=True, auto_sync=True)
+        elif action == "manual": engine.runtime.set_source(sid, enabled=True, auto_sync=False)
+        elif action == "refresh": engine.runtime.set_source(sid, refresh_hours=int(args.hours))
+        else: raise SystemExit(f"unknown source action: {action}")
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     updated = IvoireDataEngine()
@@ -98,17 +94,12 @@ def _source_control(engine: IvoireDataEngine, args) -> int:
 def _updates_control(engine: IvoireDataEngine, args) -> int:
     action = args.updates_action
     if action == "status":
-        print(json.dumps(engine.runtime.status(engine.registry), indent=2, ensure_ascii=False))
-        return 0
+        print(json.dumps(engine.runtime.status(engine.registry), indent=2, ensure_ascii=False)); return 0
     try:
-        if action == "enable":
-            engine.runtime.set_updates(automatic_enabled=True)
-        elif action == "disable":
-            engine.runtime.set_updates(automatic_enabled=False)
-        elif action == "interval":
-            engine.runtime.set_updates(scheduler_interval_seconds=int(args.seconds))
-        else:
-            raise SystemExit(f"unknown updates action: {action}")
+        if action == "enable": engine.runtime.set_updates(automatic_enabled=True)
+        elif action == "disable": engine.runtime.set_updates(automatic_enabled=False)
+        elif action == "interval": engine.runtime.set_updates(scheduler_interval_seconds=int(args.seconds))
+        else: raise SystemExit(f"unknown updates action: {action}")
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     updated = IvoireDataEngine()
@@ -118,14 +109,10 @@ def _updates_control(engine: IvoireDataEngine, args) -> int:
 
 def _qualification_control(engine: IvoireDataEngine, args) -> int:
     action = args.qualification_action
-    if action == "status":
-        payload = engine.qualification.status()
-    elif action in {"start", "reset"}:
-        payload = engine.qualification.start()
-    else:
-        raise SystemExit(f"unknown qualification action: {action}")
-    print(json.dumps(payload, indent=2, ensure_ascii=False))
-    return 0
+    if action == "status": payload = engine.qualification.status()
+    elif action in {"start", "reset"}: payload = engine.qualification.start()
+    else: raise SystemExit(f"unknown qualification action: {action}")
+    print(json.dumps(payload, indent=2, ensure_ascii=False)); return 0
 
 
 def main(argv=None) -> int:
@@ -133,54 +120,38 @@ def main(argv=None) -> int:
     engine = IvoireDataEngine()
     if args.command == "sources":
         items = engine.registry.all() if args.all else engine.registry.list()
-        if args.public:
-            items = [s for s in items if s.public]
-        for spec in items:
-            print(json.dumps(spec.__dict__, ensure_ascii=False))
+        if args.public: items = [s for s in items if s.public]
+        for spec in items: print(json.dumps(spec.__dict__, ensure_ascii=False))
         return 0
     if args.command == "status":
         items = engine.registry.all() if args.all else engine.registry.list()
-        if args.public:
-            items = [s for s in items if s.public]
+        if args.public: items = [s for s in items if s.public]
         for spec in items:
             state = engine.freshness.data.get(spec.source_id, {})
             row = {
-                "source_id": spec.source_id,
-                "domain": spec.domain,
-                "connector": spec.connector,
-                "enabled": spec.enabled,
-                "refresh_hours": spec.refresh_hours,
-                "auto_sync": spec.auto_sync,
+                "source_id": spec.source_id, "domain": spec.domain, "connector": spec.connector,
+                "enabled": spec.enabled, "refresh_hours": spec.refresh_hours, "auto_sync": spec.auto_sync,
                 "due": engine.freshness.due(spec) if spec.enabled else False,
-                "last_success": state.get("last_success"),
-                "last_status": state.get("last_status", "never"),
+                "last_success": state.get("last_success"), "last_status": state.get("last_status", "never"),
             }
-            row.update(_manifest_summary(engine, spec))
-            print(json.dumps(row, ensure_ascii=False))
+            row.update(_manifest_summary(engine, spec)); print(json.dumps(row, ensure_ascii=False))
         return 0
-    if args.command == "coverage":
-        print(json.dumps(engine.coverage(), ensure_ascii=False, indent=2)); return 0
-    if args.command == "coverage-audit":
-        print(json.dumps(engine.coverage_audit(), ensure_ascii=False, indent=2)); return 0
-    if args.command == "quality-audit":
-        print(json.dumps(engine.quality_audit(), ensure_ascii=False, indent=2)); return 0
+    if args.command == "coverage": print(json.dumps(engine.coverage(), ensure_ascii=False, indent=2)); return 0
+    if args.command == "coverage-audit": print(json.dumps(engine.coverage_audit(), ensure_ascii=False, indent=2)); return 0
+    if args.command == "quality-audit": print(json.dumps(engine.quality_audit(), ensure_ascii=False, indent=2)); return 0
+    if args.command == "discoveries": print(json.dumps(data_gouv_discoveries(engine, limit=args.limit), ensure_ascii=False, indent=2)); return 0
     if args.command == "ci-gold":
         payload = engine.write_ci_gold() if args.write else engine.ci_gold()
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str)); return 0
-    if args.command == "inventory":
-        print(json.dumps(inventory(engine.settings, engine.registry.list()), ensure_ascii=False, indent=2)); return 0
-    if args.command == "audit":
-        print(json.dumps(engine.audit(public_only=not args.all), ensure_ascii=False, indent=2)); return 0
+    if args.command == "inventory": print(json.dumps(inventory(engine.settings, engine.registry.list()), ensure_ascii=False, indent=2)); return 0
+    if args.command == "audit": print(json.dumps(engine.audit(public_only=not args.all), ensure_ascii=False, indent=2)); return 0
     if args.command == "source-path":
         spec = engine.registry.get(args.source_id)
         print(json.dumps({k: str(v) for k, v in source_paths(engine.settings, spec).items()}, ensure_ascii=False, indent=2)); return 0
     if args.command == "sync":
-        if args.source_id:
-            results = [engine.sync(args.source_id, force=args.force)]
-        elif args.due or args.all_public:
-            results = engine.sync_due(auto_only=not args.all_public, public_only=True, force=args.force)
-        else:
-            raise SystemExit("sync requires source_id, --due or --all-public")
+        if args.source_id: results = [engine.sync(args.source_id, force=args.force)]
+        elif args.due or args.all_public: results = engine.sync_due(auto_only=not args.all_public, public_only=True, force=args.force)
+        else: raise SystemExit("sync requires source_id, --due or --all-public")
         failed = 0
         for result in results:
             print(json.dumps(result.__dict__, ensure_ascii=False)); failed += result.status != "success"
@@ -188,18 +159,14 @@ def main(argv=None) -> int:
     if args.command == "scheduler":
         if args.once:
             results = run_once()
-            for result in results:
-                print(json.dumps(result.__dict__, ensure_ascii=False))
+            for result in results: print(json.dumps(result.__dict__, ensure_ascii=False))
             return 1 if any(r.status != "success" for r in results) else 0
         run_forever(args.interval); return 0
     if args.command == "query":
         print(json.dumps(query_source_sql(args.source_id, args.sql, max_rows=args.max_rows), ensure_ascii=False, default=str, indent=2)); return 0
-    if args.command == "source":
-        return _source_control(engine, args)
-    if args.command == "updates":
-        return _updates_control(engine, args)
-    if args.command == "qualification":
-        return _qualification_control(engine, args)
+    if args.command == "source": return _source_control(engine, args)
+    if args.command == "updates": return _updates_control(engine, args)
+    if args.command == "qualification": return _qualification_control(engine, args)
     return 2
 
 

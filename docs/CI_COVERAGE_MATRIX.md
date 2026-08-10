@@ -1,117 +1,140 @@
-# Matrice de couverture Côte d’Ivoire
+# Matrice de couverture Côte d’Ivoire — v2
 
-La source de vérité machine-readable est `configs/ci_coverage.json`. Ce document explique comment l’interpréter.
+La source de vérité machine-readable est `configs/ci_coverage.json`.
 
 ## Statuts
 
-- `COVERED` : le nombre minimal de sources attendues est réellement livré sans `EMPTY` ;
-- `PARTIAL` : domaine identifié mais couverture/livraison encore incomplète ;
-- `CONTROLLED` : domaine évalué mais payload soumis à droits/autorisation ;
-- `UNAVAILABLE` : information identifiée mais non disponible publiquement dans une forme ingérable ;
-- `UNRESOLVED` : source attendue connue mais non résolue/activée ;
-- `MISSING` : domaine prioritaire sans source enregistrée adéquate.
+```text
+COVERED      minimum de sources réellement livré
+PARTIAL      domaine connu mais couverture/livraison incomplète
+CONTROLLED   domaine évalué mais accès/droits contrôlés
+UNAVAILABLE  information identifiée mais non publiquement ingérable
+UNRESOLVED   source attendue désactivée/non résolue
+MISSING      aucune source adéquate enregistrée
+```
 
-## Familles évaluées
+## Portée v2
 
-La matrice v1 couvre notamment :
+La matrice évalue désormais plus de 50 familles nationales, regroupables ainsi :
 
-1. administration ;
-2. gouvernance ;
-3. finances publiques ;
-4. marchés publics ;
-5. droit / justice ;
-6. droit des affaires ;
-7. fiscalité ;
-8. élections ;
-9. démographie ;
-10. emploi / travail ;
-11. protection sociale ;
-12. économie / commerce / finance ;
-13. agriculture ;
-14. sécurité alimentaire ;
-15. élevage / pêche ;
-16. forêts ;
-17. santé ;
-18. éducation ;
-19. enseignement supérieur ;
-20. recherche ;
-21. télécoms ;
-22. médias / communication ;
-23. mines ;
-24. pétrole / gaz ;
-25. électricité ;
-26. environnement / climat / météo ;
-27. géographie ;
-28. foncier / logement ;
-29. eau / assainissement ;
-30. transport ;
-31. routes ;
-32. tourisme ;
-33. culture ;
-34. sport ;
-35. histoire / mémoire ;
-36. langues ivoiriennes ;
-37. français ivoirien / nouchi ;
-38. gastronomie.
+### État et institutions
 
-## Sources institutionnelles renforcées en v0.8.0
+- administration ;
+- gouvernance / Présidence / Parlement / CESEC ;
+- finances publiques / Cour des comptes ;
+- marchés publics ;
+- droit / justice / constitutionnalité ;
+- droit des affaires ;
+- fiscalité ;
+- élections ;
+- anti-corruption ;
+- décentralisation ;
+- fonction publique ;
+- diplomatie ;
+- défense / sécurité institutionnelle ;
+- protection civile.
 
-| Famille | Source ajoutée | Priorité |
-|---|---|---|
-| Textes officiels / histoire institutionnelle | `civ_sgg_official_texts` | P0 |
-| Finances publiques | `civ_dgbf_budget` | P0 |
-| Enseignement supérieur / recherche | `civ_mesrs` | P0 |
-| Élections | `civ_cei` | P0 |
-| Routes | `civ_ageroute` | P0 |
-| Électricité | `civ_anare` | P0 |
-| Culture | `civ_culture` | P0 |
-| Gouvernance | `civ_gouv_portal` | P0 |
-| Tourisme | `civ_tourism` | P1 |
-| Communication | `civ_communication` | P1 |
-| Sport | `civ_sports` | P1 |
+### Population et société
+
+- démographie ;
+- migration ;
+- emploi / travail ;
+- protection sociale ;
+- pauvreté / vulnérabilité ;
+- genre / femmes / famille / enfants ;
+- jeunesse ;
+- handicap.
+
+### Économie et production
+
+- économie / commerce / banque / finance ;
+- industrie ;
+- investissement ;
+- agriculture ;
+- sécurité alimentaire ;
+- élevage / pêche / aquaculture ;
+- forêts ;
+- mines ;
+- pétrole / gaz ;
+- électricité.
+
+### Services et connaissance
+
+- santé ;
+- éducation ;
+- enseignement supérieur ;
+- recherche ;
+- télécoms ;
+- numérique ;
+- cybersécurité publique ;
+- innovation ;
+- médias / communication.
+
+### Territoire et environnement
+
+- environnement / climat / météo ;
+- biodiversité ;
+- géographie / limites administratives ;
+- foncier / logement ;
+- eau / assainissement ;
+- transport ;
+- routes.
+
+### Culture et identité
+
+- tourisme ;
+- culture / patrimoine ;
+- sport ;
+- histoire / mémoire / archives ;
+- langues ivoiriennes ;
+- français ivoirien / nouchi ;
+- gastronomie.
+
+## Deux registres complémentaires
+
+```text
+registry/sources.csv
+registry/ci_gold_completeness.csv
+```
+
+Le second ajoute les institutions/familles identifiées lors de la seconde passe CI Gold : Femme/Famille/Enfant, Jeunesse, Commerce/Industrie, CEPICI, Numérique, Intérieur/Décentralisation, ONEF, Fonction publique, HABG, Défense, Assemblée nationale, Sénat, Conseil constitutionnel, Cour des comptes, CESEC, Présidence, Diplomatie, Solidarité/Pauvreté et MIRAH.
 
 ## Calcul dynamique
-
-Exécuter :
 
 ```bash
 ivoiredata coverage-audit
 ```
 
-La commande ne se contente pas de vérifier qu’une ligne existe dans le registre. Elle croise :
+La commande croise : registre, activation, politique d’accès, manifest local, `delivery_status` et nombre minimal de sources requis. Une URL enregistrée mais jamais livrée ne devient jamais `COVERED`.
 
-- le registre ;
-- `enabled` ;
-- la politique `public` ;
-- le manifest local ;
-- le `delivery_status` ;
-- le nombre minimal de sources attendu pour le domaine.
+## Découverte Data.gouv
 
-Ainsi une URL connue mais jamais livrée reste `PARTIAL` ou `MISSING`, pas `COVERED`.
+```bash
+ivoiredata discoveries
+```
+
+signale les datasets présents dans le catalogue Data.gouv.ci mais sans mapping explicite. La découverte n’ajoute pas automatiquement une source : domaine et droits doivent être revus avant activation.
 
 ## Priorités
 
-- **P0** : indispensable avant CI Gold ;
-- **P1** : importante pour une base nationale riche ;
-- **P2** : complémentaire.
+- P0 : bloque CI Gold si `MISSING`/`UNRESOLVED` ;
+- P1 : couverture nationale importante ;
+- P2 : enrichissement complémentaire.
 
-Un domaine P0 `MISSING` ou `UNRESOLVED` est un blocker CI Gold.
+## Familles contrôlées
 
-## Sources contrôlées
+Langues ivoiriennes et nouchi/français ivoirien peuvent rester `CONTROLLED` si les corpus disponibles ne disposent pas de licences compatibles. La matrice mesure aussi les limites légales ; elle ne doit jamais encourager une collecte illégitime.
 
-Les microdonnées, corpus linguistiques et contenus soumis à licence ne doivent jamais être forcés pour faire monter artificiellement le taux de couverture. Leur statut doit rester `CONTROLLED` tant que les conditions d’accès/réutilisation ne permettent pas leur ingestion.
+## Évolution
 
-## Mise à jour de la matrice
+Lorsqu’une nouvelle famille importante est identifiée :
 
-Lorsqu’une nouvelle famille nationale importante est découverte :
+1. l’ajouter à `configs/ci_coverage.json` ;
+2. identifier les sources officielles ;
+3. enregistrer source + droits ;
+4. configurer le connecteur ;
+5. synchroniser ;
+6. auditer ;
+7. ne passer `COVERED` qu’après livraison réelle.
 
-1. ajouter le domaine dans `configs/ci_coverage.json` ;
-2. attribuer P0/P1/P2 ;
-3. identifier les sources officielles ;
-4. ajouter les sources au registre ;
-5. documenter droits et accès ;
-6. configurer le connecteur ;
-7. synchroniser ;
-8. vérifier `coverage-audit` et `quality-audit`.
-
-La matrice ne doit jamais être réduite uniquement pour atteindre artificiellement le score CI Gold.
+La matrice ne doit jamais être réduite artificiellement pour augmenter le score CI Gold.
