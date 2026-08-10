@@ -1,4 +1,4 @@
-# IvoireData v0.7 — déploiement local de production.
+# IvoireData v0.7.2 — déploiement local de production.
 # Les données et l'état restent sur la machine hôte.
 # IvoireData ne monte plus corpus/tokenizer : ces artefacts appartiennent au pipeline downstream.
 
@@ -7,7 +7,7 @@ x-engine-env: &engine-env
   IVOIREDATA_STATE_DIR: /app/.ivoiredata/state
   IVOIREDATA_DATASET_NAME: ${IVOIREDATA_DATASET_NAME:-ivoiredata}
   IVOIREDATA_PIPELINE_NAME: ${IVOIREDATA_PIPELINE_NAME:-ivoiredata_engine}
-  IVOIREDATA_SCHEDULER_INTERVAL: ${IVOIREDATA_SCHEDULER_INTERVAL:-3600}
+  IVOIREDATA_SCHEDULER_INTERVAL: ${IVOIREDATA_SCHEDULER_INTERVAL:-}
 
 x-engine-volumes: &engine-volumes
   - ./data_lake:/app/data_lake
@@ -33,7 +33,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.7.1
+    image: ivoiredata:0.7.2
     restart: unless-stopped
     environment: *engine-env
     volumes: *engine-volumes
@@ -55,10 +55,10 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.7.1
+    image: ivoiredata:0.7.2
     restart: unless-stopped
     profiles: ["run"]
-    command: ["ivoiredata", "scheduler", "--interval", "${IVOIREDATA_SCHEDULER_INTERVAL:-3600}"]
+    command: ["ivoiredata", "scheduler"]
     environment: *engine-env
     volumes: *engine-volumes
     depends_on:
@@ -73,7 +73,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.7.1
+    image: ivoiredata:0.7.2
     profiles: ["sync"]
     command: ["ivoiredata", "scheduler", "--once"]
     environment: *engine-env
