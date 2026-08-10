@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
-import json
 from pathlib import Path
 from typing import Any, TYPE_CHECKING, Iterable
+
+from .state_io import atomic_write_json, load_json
 
 if TYPE_CHECKING:
     from .registry import SourceRegistry
@@ -11,12 +12,9 @@ if TYPE_CHECKING:
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
-    if path is None or not path.exists():
+    if path is None:
         return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    data = load_json(path, {})
     return data if isinstance(data, dict) else {}
 
 
@@ -77,10 +75,7 @@ class RuntimeControl:
         return max(300, value)
 
     def _write(self, data: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temp = self.path.with_suffix(self.path.suffix + ".tmp")
-        temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        temp.replace(self.path)
+        atomic_write_json(self.path, data)
 
     def set_updates(
         self,
