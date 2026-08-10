@@ -1,128 +1,190 @@
-# Contrat de sortie IvoireData → pipeline d'entraînement
+# Contrat de sortie IvoireData → pipeline downstream — CI Gold v0.8.0
 
-Ce document définit **où s'arrête IvoireData** et **où commence le pipeline de préparation du modèle**.
+Ce document définit la frontière entre le data lake vivant IvoireData et le pipeline de préparation du corpus/modèle.
 
 ## Responsabilité IvoireData
 
-IvoireData doit livrer des données :
+IvoireData livre des données :
 
-- réelles, récupérées depuis les sources déclarées ;
-- locales ;
-- classées par domaine puis par source ;
-- accompagnées de provenance ;
-- datées ;
-- versionnables par hash/checksum lorsque possible ;
-- conservées dans leur forme brute lorsque les droits et le mode d'accès le permettent ;
-- également exposées sous forme de tables/documents exploitables lorsque le connecteur sait les structurer ;
-- mises à jour automatiquement selon `refresh_hours` ;
-- sans contourner authentification, CAPTCHA, paywall ou contrôle d'accès.
+- récupérées depuis des sources déclarées ;
+- stockées localement ;
+- classées par domaine/source ;
+- accompagnées de provenance, droits et statut d’accès ;
+- enrichies avec les métadonnées nationales CI Gold ;
+- versionnables par hash/checksum lorsque disponible ;
+- mises à jour manuellement ou automatiquement ;
+- auditées par livraison, couverture, qualité et fraîcheur ;
+- sans contourner authentification, CAPTCHA, paywall ou contrôle d’accès.
 
-IvoireData **ne décide pas** du corpus final d'un modèle et ne doit pas modifier un corpus déjà utilisé pour un entraînement.
+IvoireData ne décide pas du corpus final et ne réalise pas le nettoyage ML avancé, la PII, la déduplication, le tokenizer ou l’entraînement.
 
 ## Arborescence de livraison
-
-La cible est :
 
 ```text
 data_lake/
 ├── catalog.json
+├── reports/ci-gold/
 └── domains/
-    ├── agriculture/
-    │   ├── civ_faostat/
-    │   │   ├── raw/
-    │   │   ├── tables/
-    │   │   ├── documents/
-    │   │   └── manifest.json
-    │   └── civ_agriculture_ministry/
-    │       └── ...
-    ├── health/
-    │   └── ...
-    ├── education/
-    │   └── ...
-    ├── economy/
-    │   └── ...
-    └── geography/
-        └── ...
+    └── <domain>/
+        └── <source_id>/
+            ├── raw/
+            ├── tables/
+            ├── documents/
+            └── manifest.json
 ```
 
 ### `raw/`
 
-Payload brut reçu de l'upstream lorsqu'il est raisonnable et autorisé de le conserver localement : CSV, JSON, XLSX, PDF, archive, etc. Un sidecar `.meta.json` peut conserver : URL, date de récupération, MIME, taille, SHA-256.
+Payload source original lorsque sa conservation locale est autorisée : JSON, CSV, XLS/XLSX, PDF, ZIP, PBF, etc. Les sidecars peuvent contenir URL, date, MIME, taille et SHA-256.
 
 ### `tables/`
 
-Sortie dlt normalisée pour les sources structurées. Une source dispose de son propre pipeline et de son propre état afin d'éviter qu'une évolution de schéma d'une institution casse une autre source.
+Parquet produits par le pipeline dlt par source. Pour les documents Web, les lignes peuvent être des chunks documentaires ; `delivery_status` permet de distinguer ces lignes des données métier structurées.
 
 ### `documents/`
 
-Documents/pages publics archivés ou représentations documentaires exploitables lorsque le connecteur Web/PDF les gère. Le contenu soumis à des restrictions reste traité selon `RIGHTS_AND_ACCESS.md`.
+Snapshots/pages/PDF récupérés par les connecteurs documentaires.
 
-### `manifest.json`
+### `manifest.json` — schema v3
 
-Carte d'identité opérationnelle de la source :
+Le manifest est la carte d’identité opérationnelle de la source. Exemple simplifié :
 
 ```json
 {
+  "schema_version": 3,
   "source_id": "civ_faostat",
+  "country_code": "CIV",
+  "country_name": "Côte d'Ivoire",
   "domain": "agriculture",
   "provider": "FAO",
   "source_url": "...",
   "rights_tier": "B_SOURCE_TERMS",
   "access_tier": "OPEN",
-  "connector": "bulk_catalog",
-  "status": "success",
-  "started_at": "...",
-  "finished_at": "...",
-  "refresh_hours": 168,
-  "inventory": {
-    "tables": {"files": 0, "bytes": 0},
-    "raw": {"files": 0, "bytes": 0},
-    "documents": {"files": 0, "bytes": 0}
-  }
+  "connector": "faostat_country",
+  "delivery_status": "FULL_STRUCTURED",
+  "freshness_status": "FRESH",
+  "transport_security": "VERIFIED_TLS",
+  "metadata": {
+    "source_domain": "agriculture",
+    "primary_domain": "agriculture",
+    "secondary_domains_json": "[]",
+    "language": "fr",
+    "geographic_scope": "NATIONAL",
+    "classification_status": "CONFIGURED",
+    "classification_confidence": 1.0
+  },
+  "delivery": {},
+  "freshness": {},
+  "transport": {},
+  "rights": {},
+  "warnings": []
 }
 ```
 
-### `catalog.json`
+### `catalog.json` — schema v3
 
-Index global généré à partir de toutes les sources. Il permet au pipeline downstream de découvrir les domaines et les sources sans lire `registry/sources.csv` ni connaître le code interne d'IvoireData.
+Le catalogue contient l’index global du data lake, `country_code=CIV`, les domaines, les sources et un `domain_index`. Le downstream doit utiliser ce catalogue comme point d’entrée plutôt que dépendre du code interne d’IvoireData.
 
-## Contrat minimum d'une donnée downstream
+## Métadonnées minimales downstream
 
-Le pipeline d'entraînement doit pouvoir retrouver, directement ou via le manifest :
-
-- `source_id` ;
-- `domain` ;
-- `provider` ;
-- `source_url` ;
-- `rights_tier` ;
-- `access_tier` ;
-- date de récupération ;
-- hash/checksum lorsque disponible ;
-- format ;
-- chemin local.
-
-## Données vivantes vs corpus figé
+Pour chaque unité exploitable, directement dans la table/document ou via son manifest, le downstream doit pouvoir retrouver :
 
 ```text
-IvoireData data_lake/
-       │
-       │ se met à jour
-       ▼
-Snapshot choisi par l'équipe modèle
-       │
-       │ figé
-       ▼
-Nettoyage / filtres / dédup / corpus
-       │
-       ▼
-Tokenizer / tokenisation / shards
-       │
-       ▼
-Entraînement
+country_code
+country_name
+source_id
+provider
+source_url
+source_domain
+primary_domain
+secondary_domains
+language
+document_type
+geographic_scope
+rights_tier
+access_tier
+retrieved_at / dates de sync
+content hash / checksum lorsque disponible
+chemin local
 ```
 
-Le pipeline downstream doit enregistrer le hash ou la copie du `catalog.json` utilisé afin qu'un entraînement puisse être reproduit plus tard.
+Les champs manquants doivent être traités comme `UNKNOWN`/non classifiés, jamais inventés.
+
+## Sources multidomaines
+
+Les fichiers restent stockés à un emplacement canonique unique. Les métadonnées `primary_domain` et `secondary_domains` permettent la recherche/catégorisation sans duplication physique.
+
+Data.gouv.ci et WDI peuvent porter des champs `__ivoiredata_*` au niveau dataset/indicateur pour conserver cette classification fine.
+
+## Preuves CI Gold
+
+Lorsque demandées :
+
+```bash
+ivoiredata ci-gold --write
+```
+
+IvoireData produit :
+
+```text
+data_lake/reports/ci-gold/
+├── audit.json
+├── coverage.json
+├── quality.json
+├── qualification.json
+├── sources.json
+├── ci-gold-report.json
+└── ci-gold-report.md
+```
+
+Le pipeline downstream peut archiver ces fichiers avec le snapshot utilisé pour un entraînement.
+
+## Data lake vivant vs snapshot figé
+
+```text
+IvoireData vivant
+      │
+      │ sync continu
+      ▼
+Snapshot choisi
+      │
+      ├── catalog.json
+      ├── manifests
+      ├── payloads/tables/documents
+      └── preuves CI Gold
+      │
+      ▼
+validation des droits
+→ nettoyage
+→ PII
+→ qualité
+→ déduplication
+→ corpus versionné
+→ tokenizer
+→ tokenisation
+→ packing/sharding
+→ entraînement
+```
+
+Le downstream doit enregistrer une copie/hash du catalogue, des manifests et des preuves utilisées afin qu’un entraînement soit reproductible.
+
+## CI Gold Candidate vs CI Gold final
+
+Une version logicielle v0.8.0 peut être opérationnelle alors que le data lake reste `CI Gold Candidate`. Le passage à CI Gold final exige notamment :
+
+- full sync réel après migration ;
+- aucune source active critique `EMPTY`/`ERROR` ;
+- audits couverture/qualité satisfaits ;
+- métadonnées documentaires migrées ;
+- qualification automatique réelle de 14 jours ;
+- `ivoiredata ci-gold` → `approved=true`.
+
+Le downstream ne doit pas transformer le label logiciel `v0.8.0` en affirmation de qualité du snapshot.
+
+## Droits
+
+Le downstream doit respecter `rights_tier` et `access_tier` lors de la construction du corpus. Une source `CONTROLLED` ou D n’est pas automatiquement éligible à l’entraînement parce que ses métadonnées existent dans le catalogue.
 
 ## Règle essentielle
 
-**Le data lake n'est pas le corpus.** Le data lake est la livraison exhaustive et organisée des sources. Le corpus est une sélection/transformée construite à partir d'un état précis du data lake par l'équipe entraînement.
+**Le data lake n’est pas le corpus.** IvoireData livre et qualifie les sources ; le corpus est une sélection/transformée figée produite par le pipeline downstream à partir d’un état documenté du data lake.
