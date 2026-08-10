@@ -1,6 +1,6 @@
 # IvoireData 🇨🇮
 
-**v0.7.0 — moteur local de collecte, mise à jour, audit et livraison de données classées par domaine, construit sur dlt OSS**
+**v0.7.2 — moteur local de collecte, mise à jour, audit et livraison de données classées par domaine, construit sur dlt OSS**
 
 IvoireData collecte les sources publiques utiles à la Côte d’Ivoire, conserve leur provenance, détecte les mises à jour et livre les données localement **par domaine puis par source**. Les données réelles restent sur la machine : GitHub ne contient que le code, la configuration et la documentation.
 
@@ -44,10 +44,13 @@ data_lake/
             └── manifest.json
 
 .ivoiredata/state/
-└── freshness.json
+├── freshness.json
+└── runtime_overrides.json
 ```
 
-Les tables normalisées sont en Parquet. PostgreSQL, S3, R2 et MinIO ne sont pas requis pour la v0.7.
+Les tables normalisées sont en Parquet. PostgreSQL, S3, R2 et MinIO ne sont pas requis.
+
+`configs/runtime_sources.json` contient les réglages par défaut du produit. Les changements faits par l’utilisateur (AUTO/MANUAL/DISABLED, intervalle scheduler, interrupteur global) sont persistés séparément dans `.ivoiredata/state/runtime_overrides.json`, partagé entre les conteneurs Docker.
 
 ## Un `success` ne signifie plus « données disponibles »
 
@@ -78,6 +81,43 @@ GET /audit
 
 Voir [`docs/AUDIT.md`](docs/AUDIT.md).
 
+## Mises à jour manuelles et automatiques
+
+La synchronisation manuelle reste toujours disponible pour une source active :
+
+```bash
+ivoiredata sync civ_faostat --force
+ivoiredata sync --all-public --force
+```
+
+Le scheduler automatique est contrôlable globalement :
+
+```bash
+ivoiredata updates status
+ivoiredata updates disable
+ivoiredata updates enable
+ivoiredata updates interval 1800
+```
+
+Chaque source possède trois modes :
+
+```bash
+ivoiredata source status civ_faostat
+ivoiredata source auto civ_faostat
+ivoiredata source manual civ_faostat
+ivoiredata source disable civ_faostat
+ivoiredata source enable civ_faostat
+ivoiredata source refresh civ_faostat 72
+```
+
+- `AUTOMATIC` : source active et sélectionnable par le scheduler ;
+- `MANUAL` : source active, synchronisation uniquement à la demande ;
+- `DISABLED` : source exclue du scheduler, des full sync et des sync directs.
+
+`updates disable` arrête réellement les synchronisations automatiques sans bloquer les commandes manuelles.
+
+Voir [`docs/DYNAMIC_UPDATES.md`](docs/DYNAMIC_UPDATES.md).
+
 ## Connecteurs structurés principaux
 
 - `data_gouv_ci` : catalogue Data.gouv.ci + datasets `/full`, raw + Parquet ;
@@ -91,7 +131,7 @@ Voir [`docs/AUDIT.md`](docs/AUDIT.md).
 - `public_web` : sites/PDF institutionnels bornés, même domaine, robots.txt ;
 - `http_file` : CSV/JSON/JSONL/XLS/XLSX/Parquet directs.
 
-**FAOSTAT et UIS v0.7 doivent être resynchronisés sur la machine locale après mise à jour afin de confirmer leur volume réel.** Le code/CI valide les connecteurs hors réseau ; seul le sync local valide l’upstream vivant et matérialise les données.
+FAOSTAT, UIS, ILOSTAT et World Bank Projects ont été validés par synchronisation réelle locale avant la série v0.7.x. Les volumes exacts restent propres au data lake local et doivent être lus via `ivoiredata audit`.
 
 ## Installation / mise à jour
 
@@ -111,9 +151,9 @@ docker compose build
 docker compose --profile run up -d
 ```
 
-## Validation ciblée v0.7
+Les dossiers `data_lake/` et `.ivoiredata/` restent montés depuis l’hôte. Les réglages dynamiques survivent donc aux rebuilds Docker.
 
-Après mise à jour, exécuter :
+## Validation ciblée
 
 ```bash
 ivoiredata sync civ_ilostat --force
@@ -123,7 +163,7 @@ ivoiredata sync civ_worldbank_projects --force
 ivoiredata audit
 ```
 
-Puis, pour toutes les sources publiques :
+Pour toutes les sources publiques actives :
 
 ```bash
 ivoiredata sync --all-public --force
@@ -138,20 +178,36 @@ Une source ne doit être déclarée réellement couverte que si `delivery_status
 uvicorn ivoiredata.api:app --host 127.0.0.1 --port 8000
 ```
 
-Endpoints principaux : `/health`, `/sources`, `/status`, `/coverage`, `/audit`, `/inventory`, `/sync/{source_id}`, `/query/source/{source_id}`.
+Endpoints principaux :
+
+```text
+GET  /health
+GET  /sources
+GET  /status
+GET  /coverage
+GET  /audit
+GET  /inventory
+GET  /settings/updates
+PUT  /settings/updates
+GET  /sources/{source_id}/settings
+PUT  /sources/{source_id}/settings
+POST /sync/{source_id}
+POST /query/source/{source_id}
+```
 
 ## Documentation
 
 | Document | Rôle |
 |---|---|
 | [`docs/USAGE_GUIDE.md`](docs/USAGE_GUIDE.md) | guide complet : installation, Docker, sync, audit, API, sauvegarde, diagnostic et handoff |
+| [`docs/DYNAMIC_UPDATES.md`](docs/DYNAMIC_UPDATES.md) | modes AUTO/MANUAL/DISABLED, interrupteur global, persistance et API |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | architecture et flux |
 | [`docs/ENGINE.md`](docs/ENGINE.md) | moteur interne |
 | [`docs/CONNECTORS.md`](docs/CONNECTORS.md) | connecteurs |
 | [`docs/SOURCES.md`](docs/SOURCES.md) | familles de sources |
 | [`docs/UPSTREAM_SOURCES.md`](docs/UPSTREAM_SOURCES.md) | références upstream |
 | [`docs/SOURCE_COVERAGE.md`](docs/SOURCE_COVERAGE.md) | couverture et validation live |
-| [`docs/AUDIT.md`](docs/AUDIT.md) | contrat d’audit v0.7 |
+| [`docs/AUDIT.md`](docs/AUDIT.md) | contrat d’audit |
 | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | exploitation quotidienne |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | installation/Docker |
 | [`docs/STORAGE.md`](docs/STORAGE.md) | stockage local |
@@ -168,3 +224,4 @@ Endpoints principaux : `/health`, `/sources`, `/status`, `/coverage`, `/audit`, 
 4. Provenance, URL et SHA-256 sont conservés lorsque possible.
 5. Une erreur upstream ne doit pas supprimer la dernière livraison valide.
 6. `success` technique et livraison exploitable sont toujours mesurés séparément.
+7. Les réglages utilisateur dynamiques sont séparés de la configuration versionnée du produit.
