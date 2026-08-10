@@ -86,7 +86,7 @@ def ci_gold_report(): return IvoireDataEngine().write_ci_gold()
 def qualification(): return IvoireDataEngine().qualification.status()
 
 @app.post("/qualification/start")
-def qualification_start(): return IvoireDataEngine().qualification.start()
+def qualification_start(): return IvoireDataEngine().start_qualification()
 
 @app.get("/audit")
 def audit(public_only: bool = True): return IvoireDataEngine().audit(public_only=public_only)

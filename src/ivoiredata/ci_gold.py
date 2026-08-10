@@ -31,6 +31,11 @@ _REQUIRED_DOCUMENT_COLUMNS = {
     "geographic_scope", "rights_tier", "access_tier", "classification_status",
     "classification_confidence", "retrieved_at", "content_type", "extraction_status",
 }
+_CRITICAL_CODES = {
+    "MANIFEST_MISSING", "MANIFEST_SCHEMA_LEGACY", "EMPTY_DELIVERY",
+    "SYNC_ERROR", "RIGHTS_METADATA_MISSING",
+}
+_SEVERITY_RANK = {"OK": 0, "ADVISORY": 1, "WARNING": 2, "CRITICAL": 3}
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -82,6 +87,14 @@ def _needs_ocr_files(root: Path) -> list[str]:
     if not root.exists():
         return []
     return sorted(str(path) for path in root.rglob("*.needs_ocr.json") if path.is_file())
+
+
+def _issue_severity(spec: SourceSpec, issue: str) -> str:
+    if issue == "DOCUMENTS_NEED_OCR":
+        return "ADVISORY"
+    if spec.priority.upper() == "P0" and issue in _CRITICAL_CODES:
+        return "CRITICAL"
+    return "WARNING"
 
 
 def coverage_audit(engine: IvoireDataEngine) -> dict[str, Any]:
@@ -145,7 +158,10 @@ def coverage_audit(engine: IvoireDataEngine) -> dict[str, Any]:
             "notes": item.get("notes"),
         })
 
-    p0_blockers = [row for row in rows if row["priority"] == "P0" and row["status"] in {"MISSING", "UNRESOLVED"}]
+    p0_blockers = [
+        row for row in rows
+        if row["priority"] == "P0" and row["status"] in {"PARTIAL", "MISSING", "UNRESOLVED"}
+    ]
     score = 100.0 * weighted / weighted_max if weighted_max else 0.0
     return {
         "country_code": "CIV",
@@ -181,7 +197,6 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
         audit = audit_map.get(spec.source_id, {})
         delivery_status = str(audit.get("delivery_status") or "EMPTY")
         sync_status = str(audit.get("sync_status") or "NEVER")
-        severity = "OK"
 
         source_issues: list[str] = []
         if not manifest:
@@ -217,17 +232,17 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
             else:
                 source_issues.append("DOCUMENT_METADATA_COLUMNS_INCOMPLETE")
 
-        critical_codes = {
-            "MANIFEST_MISSING", "MANIFEST_SCHEMA_LEGACY", "EMPTY_DELIVERY",
-            "SYNC_ERROR", "RIGHTS_METADATA_MISSING",
-        }
-        critical = spec.priority.upper() == "P0" and any(issue in critical_codes for issue in source_issues)
-        if critical:
-            severity = "CRITICAL"
-        elif source_issues:
-            severity = "WARNING"
+        source_severities: list[str] = []
         for issue in source_issues:
-            issues.append({"source_id": spec.source_id, "priority": spec.priority, "severity": severity, "issue": issue})
+            severity = _issue_severity(spec, issue)
+            source_severities.append(severity)
+            issues.append({
+                "source_id": spec.source_id,
+                "priority": spec.priority,
+                "severity": severity,
+                "issue": issue,
+            })
+        row_severity = max(source_severities, key=lambda value: _SEVERITY_RANK[value]) if source_severities else "OK"
 
         rows.append({
             "source_id": spec.source_id,
@@ -241,11 +256,12 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
             "needs_ocr_documents": len(needs_ocr),
             "needs_ocr_sidecars": needs_ocr[:20],
             "zero_byte_files": len(zero_byte),
-            "severity": severity,
+            "severity": row_severity,
         })
 
     critical_count = sum(1 for issue in issues if issue["severity"] == "CRITICAL")
     warning_count = sum(1 for issue in issues if issue["severity"] == "WARNING")
+    advisory_count = sum(1 for issue in issues if issue["severity"] == "ADVISORY")
     schema_ratio = (document_schema_complete / document_sources) if document_sources else 1.0
     return {
         "country_code": "CIV",
@@ -253,6 +269,7 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
             "active_public_sources": len(active),
             "critical_issues": critical_count,
             "warnings": warning_count,
+            "advisories": advisory_count,
             "legacy_manifests": legacy_manifests,
             "zero_byte_files": total_zero_byte,
             "needs_ocr_documents": total_needs_ocr,
@@ -278,8 +295,10 @@ def ci_gold_report(engine: IvoireDataEngine) -> dict[str, Any]:
     public_specs = engine.registry.list(public_only=True)
     automatic_ids = {spec.source_id for spec in engine.registry.list(public_only=True, auto_only=True)}
     attempted_ids = set(qualification.get("sources_attempted") or [])
-    automatic_sources_exercised = bool(automatic_ids) and automatic_ids.issubset(attempted_ids)
-    missing_automatic_exercise = sorted(automatic_ids - attempted_ids)
+    baseline_ids = set(qualification.get("baseline_sources") or [])
+    covered_automatic_ids = attempted_ids | baseline_ids
+    automatic_sources_exercised = bool(automatic_ids) and automatic_ids.issubset(covered_automatic_ids)
+    missing_automatic_exercise = sorted(automatic_ids - covered_automatic_ids)
 
     non_error = sum(1 for row in audit_rows if row["sync_status"] != "ERROR")
     non_empty = sum(1 for row in audit_rows if row["delivery_status"] != "EMPTY")
@@ -348,7 +367,9 @@ def ci_gold_report(engine: IvoireDataEngine) -> dict[str, Any]:
         "gates": gates,
         "stability_coverage": {
             "automatic_sources": len(automatic_ids),
-            "automatic_sources_exercised": len(automatic_ids & attempted_ids),
+            "baseline_sources": len(automatic_ids & baseline_ids),
+            "automatic_sources_attempted_in_window": len(automatic_ids & attempted_ids),
+            "automatic_sources_exercised": len(automatic_ids & covered_automatic_ids),
             "missing_automatic_sources": missing_automatic_exercise,
         },
         "coverage": coverage,
@@ -380,8 +401,9 @@ def write_ci_gold_report(engine: IvoireDataEngine) -> dict[str, Any]:
         f"- Approved: **{'YES' if report['approved'] else 'NO'}**\n"
         f"- Coverage: **{report['coverage']['summary']['coverage_score']}/100**\n"
         f"- Qualification elapsed: **{report['qualification']['elapsed_days']} days**\n"
-        f"- Automatic sources exercised: **{report['stability_coverage']['automatic_sources_exercised']}/{report['stability_coverage']['automatic_sources']}**\n"
-        f"- NEEDS_OCR documents: **{report['quality']['summary']['needs_ocr_documents']}**\n\n"
+        f"- Automatic sources covered: **{report['stability_coverage']['automatic_sources_exercised']}/{report['stability_coverage']['automatic_sources']}**\n"
+        f"- Baseline AUTO sources: **{report['stability_coverage']['baseline_sources']}**\n"
+        f"- NEEDS_OCR documents: **{report['quality']['summary']['needs_ocr_documents']}** (advisory)\n\n"
         "## Gates\n\n" + gates + "\n"
     )
     (root / "ci-gold-report.md").write_text(markdown, encoding="utf-8")

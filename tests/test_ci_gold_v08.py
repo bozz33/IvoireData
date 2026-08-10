@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import ivoiredata.discoveries as discoveries_module
+from ivoiredata.ci_gold import _issue_severity, coverage_audit
 from ivoiredata.connectors.public_web import _write_needs_ocr
 from ivoiredata.delivery import rebuild_catalog, write_source_manifest
 from ivoiredata.discoveries import data_gouv_discoveries
@@ -109,6 +110,14 @@ def test_qualification_requires_real_elapsed_window_clean_cycles_and_real_sync(t
     assert status["sources_attempted"] == ["civ_demo"] and status["qualified"] is True
 
 
+def test_qualification_baseline_is_persisted_but_does_not_fake_cycles(tmp_path: Path):
+    store = QualificationStore(tmp_path / "qualification.json")
+    status = store.start(["civ_monthly", "civ_daily", "civ_monthly"])
+    assert status["baseline_sources"] == ["civ_daily", "civ_monthly"]
+    assert status["baseline_source_count"] == 2
+    assert status["cycles_total"] == 0 and status["sync_attempts"] == 0 and status["qualified"] is False
+
+
 def test_qualification_rejects_empty_scheduler_cycles_even_after_14_days(tmp_path: Path):
     store = QualificationStore(tmp_path / "qualification.json"); store.start()
     store.data["started_at"] = (datetime.now(timezone.utc) - timedelta(days=15)).replace(microsecond=0).isoformat().replace("+00:00", "Z"); store._save()
@@ -122,6 +131,28 @@ def test_qualification_rejects_any_automatic_error(tmp_path: Path):
     for _ in range(13): store.record_cycle([_Result("civ_demo", "success")])
     store.record_cycle([_Result("civ_demo", "error")])
     assert store.status()["qualified"] is False and store.status()["sources_with_errors"] == ["civ_demo"]
+
+
+def test_p0_partial_coverage_is_a_blocker(tmp_path: Path):
+    coverage_path = tmp_path / "coverage.json"
+    coverage_path.write_text(json.dumps({"version": 2, "domains": [{"domain_id": "health", "priority": "P0", "source_ids": ["civ_demo", "civ_missing"], "minimum_usable_sources": 2}]}), encoding="utf-8")
+    spec = _spec()
+    class Registry:
+        def all(self): return [spec]
+    class Engine:
+        settings = Settings(ci_coverage_path=coverage_path)
+        registry = Registry()
+        def audit(self, public_only=False):
+            return {"rows": [{"source_id": "civ_demo", "delivery_status": "DOCUMENTS_ONLY"}]}
+    result = coverage_audit(Engine())
+    assert result["rows"][0]["status"] == "PARTIAL"
+    assert result["summary"]["p0_blockers"] == 1
+
+
+def test_needs_ocr_is_advisory_not_quality_penalty():
+    assert _issue_severity(_spec(priority="P0"), "DOCUMENTS_NEED_OCR") == "ADVISORY"
+    assert _issue_severity(_spec(priority="P0"), "MANIFEST_SCHEMA_LEGACY") == "CRITICAL"
+    assert _issue_severity(_spec(priority="P1"), "MANIFEST_SCHEMA_LEGACY") == "WARNING"
 
 
 def test_ci_gold_config_references_existing_registry_sources():

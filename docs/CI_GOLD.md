@@ -52,29 +52,11 @@ La matrice v2 dépasse 50 familles et inclut notamment : institutions de la Rép
 
 Les corpus linguistiques/culturels soumis à droits peuvent rester `CONTROLLED`. Cela vaut mieux qu’une ingestion illégitime.
 
+Un domaine **P0** doit être réellement `COVERED`. `PARTIAL`, `MISSING` et `UNRESOLVED` sont des blockers CI Gold.
+
 ## Sources institutionnelles complétées
 
-En plus du socle v0.8.0, v0.8.1 ajoute notamment :
-
-- Femme/Famille/Enfant ;
-- Jeunesse ;
-- Commerce/Industrie ;
-- CEPICI ;
-- ministère du Numérique ;
-- Intérieur/Décentralisation ;
-- ONEF ;
-- Fonction publique ;
-- HABG ;
-- Défense ;
-- Assemblée nationale ;
-- Sénat ;
-- Conseil constitutionnel ;
-- Cour des comptes ;
-- CESEC ;
-- Présidence ;
-- Diplomatie ;
-- Solidarité/Pauvreté ;
-- MIRAH.
+En plus du socle v0.8.0, v0.8.1 ajoute notamment : Femme/Famille/Enfant, Jeunesse, Commerce/Industrie, CEPICI, ministère du Numérique, Intérieur/Décentralisation, ONEF, Fonction publique, HABG, Défense, Assemblée nationale, Sénat, Conseil constitutionnel, Cour des comptes, CESEC, Présidence, Diplomatie, Solidarité/Pauvreté et MIRAH.
 
 ## Découverte de nouvelles ressources
 
@@ -97,15 +79,13 @@ Une découverte n’est **jamais auto-ingérée**.
 
 ## PDF scannés
 
-Le connecteur document distingue les PDF textuels des PDF probablement scannés/text-poor.
-
-Pour ces derniers :
+Le connecteur document distingue les PDF textuels des PDF probablement scannés/text-poor. Pour ces derniers :
 
 ```text
 extraction_status=NEEDS_OCR
 ```
 
-Le PDF brut reste conservé et un sidecar `*.needs_ocr.json` est créé. `automatic_ocr=false` : IvoireData ne lance pas automatiquement une OCR coûteuse ou risquée.
+Le PDF brut reste conservé et un sidecar `*.needs_ocr.json` est créé. `automatic_ocr=false`. `NEEDS_OCR` est une **ADVISORY** : il reste visible dans les preuves, mais ne pénalise pas le score de qualité comme une panne de collecte.
 
 ## Audits
 
@@ -121,19 +101,23 @@ ivoiredata ci-gold
 
 ## Qualification de stabilité
 
+La séquence correcte est : full sync propre → audits propres → qualification.
+
 ```bash
 ivoiredata qualification start
 ivoiredata qualification status
 ```
 
-Seuls les cycles automatiques comptent. Les sync manuels ne qualifient jamais artificiellement le système.
+Au démarrage, IvoireData enregistre un **baseline** des sources AUTO déjà `SUCCESS`, non `EMPTY` et `FRESH` grâce au full sync de préflight. Ce baseline ne compte ni comme cycle scheduler ni comme tentative automatique ; il sert uniquement à prouver que les sources à longue fréquence (par exemple 720 h) étaient saines au début de la fenêtre.
+
+Ensuite seuls les cycles automatiques comptent vers la stabilité. Les sync manuels ne peuvent pas fabriquer les 14 jours/cycles.
 
 Conditions minimales :
 
 - >=14 jours calendaires réels ;
 - >=14 cycles scheduler ;
-- au moins une vraie synchronisation automatique réussie ;
-- toutes les sources publiques actives en mode AUTOMATIC exercées au moins une fois ;
+- au moins une vraie synchronisation automatique réussie pendant la fenêtre ;
+- toutes les sources AUTO couvertes par le baseline propre ou réellement tentées automatiquement ;
 - zéro cycle automatique avec erreur ;
 - zéro sync automatique en erreur.
 
@@ -149,7 +133,7 @@ Conditions minimales :
 | Droits | 10 % |
 | Handoff | 5 % |
 
-Le score est un outil interne. Les gates obligatoires ne peuvent pas être contournés par un bon score.
+Le score est un outil interne. Les gates obligatoires ne peuvent pas être contournés par un bon score. La stabilité ne représente que 10 % : attendre 14 jours ne répare pas à lui seul des manifests legacy ou un schéma documentaire incomplet.
 
 ## Gates obligatoires
 
@@ -192,7 +176,7 @@ docker compose exec api ivoiredata quality-audit
 docker compose exec api ivoiredata discoveries
 ```
 
-Ne démarrer/réinitialiser la qualification qu’après correction des problèmes de full sync.
+Ne démarrer/réinitialiser la qualification qu’après correction des problèmes de full sync et des migrations de métadonnées.
 
 ## Definition of Done
 
@@ -200,11 +184,12 @@ La Côte d’Ivoire peut être appelée **CI Gold final** seulement lorsque :
 
 1. le code/CI est vert ;
 2. le data lake local a été entièrement migré v0.8.1 ;
-3. aucun P0 actif n’est `EMPTY/ERROR/MISSING/UNRESOLVED` ;
+3. aucun P0 actif n’est `PARTIAL/EMPTY/ERROR/MISSING/UNRESOLVED` ;
 4. les droits et manifests v3 sont complets ;
-5. la qualification réelle est validée ;
-6. `ivoiredata ci-gold` retourne `approved=true` ;
-7. `ivoiredata ci-gold --write` produit les preuves ;
-8. le snapshot/handoff downstream est reproductible.
+5. les métadonnées documentaires sont complètes ;
+6. la qualification réelle est validée ;
+7. `ivoiredata ci-gold` retourne `approved=true` ;
+8. `ivoiredata ci-gold --write` produit les preuves ;
+9. le snapshot/handoff downstream est reproductible.
 
 Avant cela, le statut correct est **CI Gold Candidate**.
