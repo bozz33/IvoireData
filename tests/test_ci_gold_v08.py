@@ -33,6 +33,12 @@ def _spec(**kwargs) -> SourceSpec:
     return SourceSpec(**data)
 
 
+class _Result:
+    def __init__(self, source_id: str, status: str):
+        self.source_id = source_id
+        self.status = status
+
+
 def test_source_metadata_is_explicitly_cote_divoire():
     meta = source_metadata(_spec())
     assert meta["country_code"] == "CIV"
@@ -53,7 +59,8 @@ def test_multidomain_classifier_uses_deterministic_keywords():
 
 
 def test_document_type_classifier_detects_budget_and_law():
-    assert infer_document_type("https://example.ci/doc", "Budget citoyen et loi de finances 2026") == "LAW" or infer_document_type("https://example.ci/doc", "Budget citoyen et loi de finances 2026") == "BUDGET"
+    detected = infer_document_type("https://example.ci/doc", "Budget citoyen et loi de finances 2026")
+    assert detected in {"LAW", "BUDGET"}
     assert infer_document_type("https://example.ci/decret-2026", "Décret portant organisation") == "DECREE"
 
 
@@ -122,34 +129,48 @@ def test_registry_uses_packaged_ci_gold_overlay(tmp_path: Path):
     assert spec.refresh_hours == 72
 
 
-def test_qualification_requires_real_elapsed_window_and_clean_cycles(tmp_path: Path):
+def test_qualification_requires_real_elapsed_window_clean_cycles_and_real_sync(tmp_path: Path):
     path = tmp_path / "qualification.json"
     store = QualificationStore(path)
     store.start()
     store.data["started_at"] = (datetime.now(timezone.utc) - timedelta(days=15)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     store._save()
     for _ in range(14):
-        store.record_cycle([])
+        store.record_cycle([_Result("civ_demo", "success")])
     status = store.status()
     assert status["elapsed_days"] >= 14
     assert status["cycles_total"] == 14
+    assert status["sync_attempts"] == 14
+    assert status["sync_successes"] == 14
+    assert status["sources_attempted"] == ["civ_demo"]
     assert status["qualified"] is True
 
 
-def test_qualification_rejects_any_automatic_error(tmp_path: Path):
-    class Result:
-        def __init__(self, source_id: str, status: str):
-            self.source_id = source_id
-            self.status = status
+def test_qualification_rejects_empty_scheduler_cycles_even_after_14_days(tmp_path: Path):
+    store = QualificationStore(tmp_path / "qualification.json")
+    store.start()
+    store.data["started_at"] = (datetime.now(timezone.utc) - timedelta(days=15)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    store._save()
+    for _ in range(14):
+        store.record_cycle([])
+    status = store.status()
+    assert status["cycles_total"] == 14
+    assert status["sync_attempts"] == 0
+    assert status["qualified"] is False
 
+
+def test_qualification_rejects_any_automatic_error(tmp_path: Path):
     store = QualificationStore(tmp_path / "qualification.json")
     store.start()
     store.data["started_at"] = (datetime.now(timezone.utc) - timedelta(days=15)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     store._save()
     for _ in range(13):
-        store.record_cycle([])
-    store.record_cycle([Result("civ_demo", "error")])
-    assert store.status()["qualified"] is False
+        store.record_cycle([_Result("civ_demo", "success")])
+    store.record_cycle([_Result("civ_demo", "error")])
+    status = store.status()
+    assert status["sync_errors"] == 1
+    assert status["sources_with_errors"] == ["civ_demo"]
+    assert status["qualified"] is False
 
 
 def test_ci_gold_config_references_existing_registry_sources():
