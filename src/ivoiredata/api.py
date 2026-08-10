@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -9,7 +11,7 @@ from .query import query_source_sql
 from .ranking import rank_sources
 from .search import search_documents
 
-app = FastAPI(title="IvoireData Engine", version="0.7.1")
+app = FastAPI(title="IvoireData Engine", version="0.7.2")
 
 
 class SQLRequest(BaseModel):
@@ -17,16 +19,31 @@ class SQLRequest(BaseModel):
     max_rows: int = 1000
 
 
+class UpdateSettingsRequest(BaseModel):
+    automatic_enabled: bool | None = None
+    scheduler_interval_seconds: int | None = None
+
+
+class SourceSettingsRequest(BaseModel):
+    enabled: bool | None = None
+    update_mode: Literal["AUTOMATIC", "MANUAL", "DISABLED"] | None = None
+    refresh_hours: int | None = None
+
+
 @app.get("/health")
 def health():
     engine = IvoireDataEngine()
-    return {"status": "ok", "engine": "IvoireData", "version": "0.7.1", "storage": "local", "data_dir": str(engine.settings.data_dir)}
+    return {"status": "ok", "engine": "IvoireData", "version": "0.7.2", "storage": "local", "data_dir": str(engine.settings.data_dir)}
 
 
 @app.get("/sources")
-def sources(public_only: bool = False, domain: str | None = None):
-    engine = IvoireDataEngine(); items = engine.registry.list(public_only=public_only)
-    if domain: items = [s for s in items if s.domain in {domain, "multidomain"}]
+def sources(public_only: bool = False, domain: str | None = None, include_disabled: bool = False):
+    engine = IvoireDataEngine()
+    items = engine.registry.all() if include_disabled else engine.registry.list()
+    if public_only:
+        items = [s for s in items if s.public]
+    if domain:
+        items = [s for s in items if s.domain in {domain, "multidomain"}]
     return [{**s.__dict__, "rank": score} for s, score in rank_sources(items, domain=domain)]
 
 
@@ -40,6 +57,7 @@ def status(public_only: bool = True):
         rows.append({
             "source_id": spec.source_id,
             "domain": spec.domain,
+            "enabled": spec.enabled,
             "due": engine.freshness.due(spec),
             "refresh_hours": spec.refresh_hours,
             "auto_sync": spec.auto_sync,
@@ -68,6 +86,60 @@ def audit(public_only: bool = True):
 def data_inventory():
     engine = IvoireDataEngine()
     return inventory(engine.settings, engine.registry.list())
+
+
+@app.get("/settings/updates")
+def update_settings():
+    engine = IvoireDataEngine()
+    return engine.runtime.status(engine.registry)
+
+
+@app.put("/settings/updates")
+def set_update_settings(req: UpdateSettingsRequest):
+    engine = IvoireDataEngine()
+    try:
+        engine.runtime.set_updates(
+            automatic_enabled=req.automatic_enabled,
+            scheduler_interval_seconds=req.scheduler_interval_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    updated = IvoireDataEngine()
+    return updated.runtime.status(updated.registry)
+
+
+@app.get("/sources/{source_id}/settings")
+def source_settings(source_id: str):
+    engine = IvoireDataEngine()
+    try:
+        return engine.runtime.source_status(engine.registry, source_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put("/sources/{source_id}/settings")
+def set_source_settings(source_id: str, req: SourceSettingsRequest):
+    engine = IvoireDataEngine()
+    try:
+        engine.registry.get(source_id)
+        changes: dict[str, object] = {}
+        if req.update_mode == "DISABLED":
+            changes["enabled"] = False
+        elif req.update_mode == "AUTOMATIC":
+            changes.update(enabled=True, auto_sync=True)
+        elif req.update_mode == "MANUAL":
+            changes.update(enabled=True, auto_sync=False)
+        if req.enabled is not None:
+            changes["enabled"] = req.enabled
+        if req.refresh_hours is not None:
+            changes["refresh_hours"] = req.refresh_hours
+        engine.runtime.set_source(source_id, **changes)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    updated = IvoireDataEngine()
+    return updated.runtime.source_status(updated.registry, source_id)
 
 
 @app.get("/sources/{source_id}/path")
