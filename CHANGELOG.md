@@ -1,58 +1,51 @@
 # Changelog
 
-## v0.8.0 — CI Gold foundation
+## v0.8.1 — CI Gold completeness
 
 ### Added
 
-- Côte d’Ivoire national metadata contract (`country_code=CIV`, domains, language, document type, geographic scope, rights, classification status/confidence).
-- Manifest and catalog schema v3.
-- Deterministic document/domain classifier for public documents and multidomain sources.
-- Dataset/indicator classification for Data.gouv.ci and World Bank WDI.
-- CI Gold coverage matrix (`configs/ci_coverage.json`).
-- CI Gold source overlay (`configs/ci_gold_sources.json`).
-- New official CI sources: SGG, DGBF, MESRS, CEI, AGEROUTE, ANARE-CI, Culture, Tourism, Communication, Sports and Government portal.
-- `coverage-audit`, `quality-audit`, `ci-gold`, `qualification` CLI commands.
-- Matching CI Gold API endpoints.
-- CI Gold score and mandatory gates.
-- 14-day automatic stability qualification ledger.
-- Requirement that every active automatic source is actually exercised during qualification.
-- CI Gold report bundle under `data_lake/reports/ci-gold/`.
-- Documentation: CI Gold specification, coverage matrix, updated architecture, audit, usage, deployment and downstream handoff.
+- Second CI Gold registry overlay with 19 additional official/institutional sources: gender/family, youth, industry/commerce, CEPICI investment, digital ministry, interior/decentralization, ONEF, civil service, HABG, defense, National Assembly, Senate, Constitutional Council, Court of Accounts, CESEC, Presidency, diplomacy, solidarity/poverty and MIRAH.
+- Coverage matrix v2 with more than 50 national knowledge families, including gender, youth, poverty, migration, decentralization, industry, investment, digital, public cybersecurity, innovation, civil protection, defense, diplomacy and anti-corruption.
+- `ivoiredata discoveries` and `GET /discoveries` to compare the synchronized Data.gouv.ci catalog with explicit registry mappings. Discoveries are review-only and never auto-ingested.
+- `NEEDS_OCR` detection for scanned/text-poor PDFs, with local `*.needs_ocr.json` sidecars and no automatic OCR.
+- Quality audit counters for legacy manifests, zero-byte files and OCR-needed documents.
+- CI Gold gate `manifest_v3_complete`.
+- Query/document-search layers now honor the same effective registry, CI Gold overlays and persistent runtime overrides as the main engine.
+- Validation across both registry files and the complete CI Gold coverage matrix.
 
 ### Changed
 
-- Version 0.7.2 → 0.8.0.
-- Audit summary now separates structured rows, document rows and total Parquet rows.
-- Runtime configuration now merges base config → packaged CI Gold overlay → persistent local overrides.
-- Scheduler records only automatic cycles for qualification; manual syncs cannot satisfy stability gates.
-- Docker image/version updated to 0.8.0.
+- Version 0.8.0 → 0.8.1.
+- Search returns richer document metadata including domain, title, language and document type.
+- Public document tables include `content_type` and `extraction_status`.
+- Taxonomy expanded for national social, institutional, economic and digital knowledge.
 
-### Migration
-
-After upgrade from v0.7.2, rebuild and run a forced public sync to regenerate manifests v3 and enrich document Parquet metadata:
+### Operational migration
 
 ```bash
+git pull
 docker compose build
 docker compose --profile run up -d
+
 docker compose --profile sync run --rm sync-once \
   sh -c "ivoiredata sync --all-public --force"
-```
 
-Then run:
-
-```bash
 docker compose exec api ivoiredata audit
 docker compose exec api ivoiredata coverage-audit
 docker compose exec api ivoiredata quality-audit
+docker compose exec api ivoiredata discoveries
 ```
 
-Only after the local data lake is clean should the 14-day qualification be started:
+Only after the local full sync is clean should the qualification window be started/reset.
 
-```bash
-docker compose exec api ivoiredata qualification start
-```
+## v0.8.0 — CI Gold foundation
 
-A software release tagged v0.8.0 is a **CI Gold foundation/candidate**. A data lake may be called **CI Gold final** only when `ivoiredata ci-gold` returns `approved=true` after the real qualification window.
+- National CIV metadata contract and manifest/catalog schema v3.
+- Deterministic classification for documents, Data.gouv.ci datasets and WDI indicators.
+- Initial CI Gold source overlay and coverage matrix.
+- Coverage, quality, qualification and CI Gold audits.
+- 14-day real automatic stability qualification and mandatory gates.
+- CI Gold report bundle under `data_lake/reports/ci-gold/`.
 
 ## v0.7.2
 
