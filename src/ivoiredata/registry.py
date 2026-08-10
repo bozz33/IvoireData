@@ -59,8 +59,19 @@ class SourceRegistry:
     ) -> "SourceRegistry":
         sources: dict[str, SourceSpec] = {}
         _load_registry_csv(csv_path, sources)
-        for overlay in registry_overlay_paths or []:
+
+        # Standard packaged overlays are discovered automatically so older call sites
+        # cannot silently ignore CI Gold additions. Custom/tmp registries are unaffected
+        # unless the sibling overlay files actually exist.
+        if registry_overlay_paths is None:
+            candidate = csv_path.with_name("ci_gold_completeness.csv")
+            registry_overlay_paths = [candidate] if candidate.exists() else []
+        for overlay in registry_overlay_paths:
             _load_registry_csv(overlay, sources)
+
+        if runtime_overlay_paths is None and runtime_path is not None:
+            candidate = runtime_path.with_name("ci_gold_sources.json")
+            runtime_overlay_paths = [candidate] if candidate.exists() else []
 
         config = load_runtime_config(runtime_path, runtime_overrides_path, runtime_overlay_paths)
         defaults = config.get("defaults", {})
