@@ -23,11 +23,22 @@ def _execute(pipeline, sql: str, max_rows: int) -> list[dict[str, Any]]:
     return [dict(zip(names, row)) for row in rows]
 
 
+def _registry(settings: Settings) -> SourceRegistry:
+    return SourceRegistry.load(
+        settings.registry_path,
+        settings.runtime_config_path,
+        settings.runtime_overrides_path,
+        [settings.ci_gold_runtime_path],
+        settings.registry_overlay_paths,
+    )
+
+
 def query_source_sql(source_id: str, sql: str, settings: Settings | None = None, max_rows: int = 1000) -> list[dict[str, Any]]:
     _validate(sql)
     settings = settings or Settings.from_env()
-    registry = SourceRegistry.load(settings.registry_path, settings.runtime_config_path)
-    spec = registry.get(source_id)
+    spec = _registry(settings).get(source_id)
+    if not spec.enabled:
+        raise PermissionError(f"{source_id} is disabled")
     return _execute(get_source_pipeline(settings, spec), sql, max_rows)
 
 
