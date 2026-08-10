@@ -67,7 +67,7 @@ class UpstreamState:
 
     def mark_unchanged(self, source_id: str, artifact_id: str, *, signature: str | None = None,
                        url: str | None = None, reason: str = "signature", etag: str | None = None,
-                       last_modified: str | None = None) -> dict[str, Any]:
+                       last_modified: str | None = None, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         values: dict[str, Any] = {
             "last_checked": _now(),
             "last_result": "UNCHANGED",
@@ -83,15 +83,17 @@ class UpstreamState:
             values["etag"] = etag
         if last_modified is not None:
             values["last_modified"] = last_modified
+        if extra:
+            values.update(extra)
         return self._update(source_id, artifact_id, **values)
 
     def mark_downloaded(self, source_id: str, artifact_id: str, *, url: str, signature: str | None,
                         sha256: str | None, size_bytes: int | None, etag: str | None = None,
                         last_modified: str | None = None, method: str | None = None,
-                        rows: int | None = None, local_path: str | None = None) -> dict[str, Any]:
+                        rows: int | None = None, local_path: str | None = None,
+                        extra: dict[str, Any] | None = None) -> dict[str, Any]:
         now = _now()
-        return self._update(
-            source_id, artifact_id,
+        values: dict[str, Any] = dict(
             url=url,
             signature=signature,
             sha256=sha256,
@@ -108,9 +110,13 @@ class UpstreamState:
             last_result="DOWNLOADED",
             error=None,
         )
+        if extra:
+            values.update(extra)
+        return self._update(source_id, artifact_id, **values)
 
-    def mark_http_unchanged(self, source_id: str, artifact_id: str, *, url: str) -> dict[str, Any]:
-        return self.mark_unchanged(source_id, artifact_id, url=url, reason="HTTP_304")
+    def mark_http_unchanged(self, source_id: str, artifact_id: str, *, url: str,
+                            extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.mark_unchanged(source_id, artifact_id, url=url, reason="HTTP_304", extra=extra)
 
     def mark_error(self, source_id: str, artifact_id: str, *, url: str, error: str,
                    status_code: int | None = None, method: str | None = None) -> dict[str, Any]:
