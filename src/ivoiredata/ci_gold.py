@@ -249,21 +249,29 @@ def ci_gold_report(engine: IvoireDataEngine) -> dict[str, Any]:
     audit_rows = base_audit["rows"]
 
     active = len(audit_rows)
+    public_specs = engine.registry.list(public_only=True)
+    automatic_ids = {spec.source_id for spec in engine.registry.list(public_only=True, auto_only=True)}
+    attempted_ids = set(qualification.get("sources_attempted") or [])
+    automatic_sources_exercised = bool(automatic_ids) and automatic_ids.issubset(attempted_ids)
+    missing_automatic_exercise = sorted(automatic_ids - attempted_ids)
+
     non_error = sum(1 for row in audit_rows if row["sync_status"] != "ERROR")
     non_empty = sum(1 for row in audit_rows if row["delivery_status"] != "EMPTY")
     freshish = sum(1 for row in audit_rows if row["freshness_status"] in {"FRESH", "DUE"})
-    rights_ok = sum(1 for spec in engine.registry.list(public_only=True) if spec.rights_tier and spec.access_tier)
-    manifests_ok = sum(1 for spec in engine.registry.list(public_only=True) if source_paths(engine.settings, spec)["manifest"].exists())
+    rights_ok = sum(1 for spec in public_specs if spec.rights_tier and spec.access_tier)
+    manifests_ok = sum(1 for spec in public_specs if source_paths(engine.settings, spec)["manifest"].exists())
     catalog_ok = (engine.settings.data_dir / "catalog.json").exists()
 
     coverage_component = coverage["summary"]["coverage_score"]
     quality_component = max(0.0, 100.0 - quality["summary"]["critical_issues"] * 10.0 - quality["summary"]["warnings"] * 1.5)
     classification_component = float(quality["summary"]["document_schema_completeness_pct"])
     freshness_component = (freshish / active * 100.0) if active else 0.0
-    stability_component = 100.0 if qualification["qualified"] else min(
+    stability_fully_qualified = bool(qualification["qualified"] and automatic_sources_exercised)
+    stability_component = 100.0 if stability_fully_qualified else min(
         90.0,
-        min(qualification["elapsed_days"] / 14.0, 1.0) * 50.0
-        + min(qualification["cycles_total"] / 14.0, 1.0) * 40.0
+        min(qualification["elapsed_days"] / 14.0, 1.0) * 45.0
+        + min(qualification["cycles_total"] / 14.0, 1.0) * 30.0
+        + (15.0 if automatic_sources_exercised else 0.0)
         - min(qualification["cycles_with_errors"] * 10.0, 40.0),
     )
     rights_component = (rights_ok / active * 100.0) if active else 0.0
@@ -298,6 +306,7 @@ def ci_gold_report(engine: IvoireDataEngine) -> dict[str, Any]:
         "rights_complete": rights_ok == active,
         "document_metadata_complete": quality["summary"]["document_schema_completeness_pct"] >= 99.0,
         "qualification_14_days": qualification["qualified"],
+        "automatic_sources_exercised": automatic_sources_exercised,
         "catalog_present": catalog_ok,
         "all_manifests_present": manifests_ok == active,
     }
@@ -310,6 +319,11 @@ def ci_gold_report(engine: IvoireDataEngine) -> dict[str, Any]:
         "approved": approved,
         "components": components,
         "gates": gates,
+        "stability_coverage": {
+            "automatic_sources": len(automatic_ids),
+            "automatic_sources_exercised": len(automatic_ids & attempted_ids),
+            "missing_automatic_sources": missing_automatic_exercise,
+        },
         "coverage": coverage,
         "quality": quality,
         "qualification": qualification,
@@ -338,7 +352,8 @@ def write_ci_gold_report(engine: IvoireDataEngine) -> dict[str, Any]:
         f"- Score: **{report['score']}/100**\n"
         f"- Approved: **{'YES' if report['approved'] else 'NO'}**\n"
         f"- Coverage: **{report['coverage']['summary']['coverage_score']}/100**\n"
-        f"- Qualification elapsed: **{report['qualification']['elapsed_days']} days**\n\n"
+        f"- Qualification elapsed: **{report['qualification']['elapsed_days']} days**\n"
+        f"- Automatic sources exercised: **{report['stability_coverage']['automatic_sources_exercised']}/{report['stability_coverage']['automatic_sources']}**\n\n"
         "## Gates\n\n" + gates + "\n"
     )
     (root / "ci-gold-report.md").write_text(markdown, encoding="utf-8")
