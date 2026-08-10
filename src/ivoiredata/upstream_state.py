@@ -46,6 +46,16 @@ class UpstreamState:
             headers["If-Modified-Since"] = str(row["last_modified"])
         return headers
 
+    def cached_path(self, source_id: str, artifact_id: str, signature: str | None = None) -> Path | None:
+        row = self.get(source_id, artifact_id)
+        if signature is not None and row.get("signature") != signature:
+            return None
+        value = row.get("local_path")
+        if not value:
+            return None
+        path = Path(str(value))
+        return path if path.exists() else None
+
     def _update(self, source_id: str, artifact_id: str, **values: Any) -> dict[str, Any]:
         key = self.key(source_id, artifact_id)
         row = self.data["resources"].setdefault(key, {})
@@ -78,7 +88,7 @@ class UpstreamState:
     def mark_downloaded(self, source_id: str, artifact_id: str, *, url: str, signature: str | None,
                         sha256: str | None, size_bytes: int | None, etag: str | None = None,
                         last_modified: str | None = None, method: str | None = None,
-                        rows: int | None = None) -> dict[str, Any]:
+                        rows: int | None = None, local_path: str | None = None) -> dict[str, Any]:
         now = _now()
         return self._update(
             source_id, artifact_id,
@@ -90,6 +100,7 @@ class UpstreamState:
             last_modified=last_modified,
             method=method,
             rows=rows,
+            local_path=local_path,
             downloaded=True,
             removed=False,
             last_checked=now,
