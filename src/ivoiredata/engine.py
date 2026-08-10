@@ -154,6 +154,28 @@ class IvoireDataEngine:
     def sync_due(self, *, auto_only: bool = True, public_only: bool = True, force: bool = False) -> list[SyncResult]:
         return [self.sync(s.source_id, force=force) for s in self.registry.list(public_only=public_only, auto_only=auto_only) if force or self.freshness.due(s)]
 
+    def qualification_baseline(self) -> list[str]:
+        """Return AUTO sources that are clean and fresh at qualification start.
+
+        The baseline is evidence from the required preflight/full sync. It does
+        not count as an automatic cycle and therefore cannot satisfy the
+        14-day/cycle gates by itself.
+        """
+        audit_map = {row["source_id"]: row for row in self.audit(public_only=True)["rows"]}
+        baseline: list[str] = []
+        for spec in self.registry.list(public_only=True, auto_only=True):
+            row = audit_map.get(spec.source_id, {})
+            if (
+                row.get("sync_status") == "SUCCESS"
+                and row.get("delivery_status") != "EMPTY"
+                and row.get("freshness_status") == "FRESH"
+            ):
+                baseline.append(spec.source_id)
+        return sorted(baseline)
+
+    def start_qualification(self) -> dict:
+        return self.qualification.start(baseline_sources=self.qualification_baseline())
+
     def coverage(self) -> dict:
         all_specs = self.registry.all()
         specs = self.registry.list()
