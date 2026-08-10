@@ -35,7 +35,7 @@ class UpstreamState:
         if not signature:
             return False
         row = self.get(source_id, artifact_id)
-        return bool(row.get("downloaded") and row.get("signature") == signature)
+        return bool(row.get("downloaded") and row.get("signature") == signature and not row.get("removed"))
 
     def conditional_headers(self, source_id: str, artifact_id: str) -> dict[str, str]:
         row = self.get(source_id, artifact_id)
@@ -56,12 +56,23 @@ class UpstreamState:
         return dict(row)
 
     def mark_unchanged(self, source_id: str, artifact_id: str, *, signature: str | None = None,
-                       url: str | None = None, reason: str = "signature") -> dict[str, Any]:
-        values: dict[str, Any] = {"last_checked": _now(), "last_result": "UNCHANGED", "unchanged_reason": reason}
+                       url: str | None = None, reason: str = "signature", etag: str | None = None,
+                       last_modified: str | None = None) -> dict[str, Any]:
+        values: dict[str, Any] = {
+            "last_checked": _now(),
+            "last_result": "UNCHANGED",
+            "unchanged_reason": reason,
+            "removed": False,
+            "error": None,
+        }
         if signature is not None:
             values["signature"] = signature
         if url is not None:
             values["url"] = url
+        if etag is not None:
+            values["etag"] = etag
+        if last_modified is not None:
+            values["last_modified"] = last_modified
         return self._update(source_id, artifact_id, **values)
 
     def mark_downloaded(self, source_id: str, artifact_id: str, *, url: str, signature: str | None,
@@ -80,6 +91,7 @@ class UpstreamState:
             method=method,
             rows=rows,
             downloaded=True,
+            removed=False,
             last_checked=now,
             last_downloaded=now,
             last_result="DOWNLOADED",
@@ -99,6 +111,14 @@ class UpstreamState:
             method=method,
             last_checked=_now(),
             last_result="ERROR",
+        )
+
+    def mark_removed(self, source_id: str, artifact_id: str) -> dict[str, Any]:
+        return self._update(
+            source_id, artifact_id,
+            removed=True,
+            last_checked=_now(),
+            last_result="REMOVED_UPSTREAM",
         )
 
     def source_rows(self, source_id: str) -> list[dict[str, Any]]:
