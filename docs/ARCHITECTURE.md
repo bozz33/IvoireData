@@ -1,125 +1,147 @@
-# Architecture IvoireData v0.6
+# Architecture IvoireData v0.8.0 — CI Gold
 
-IvoireData est un moteur **local-only pour les données**. Git contient le code, le registre et la documentation ; le PC contient les payloads réels.
+IvoireData reste un moteur **local-first / local data plane** : Git contient code/config/docs ; la machine contient les payloads, manifests, overrides et preuves CI Gold.
 
 ## Vue générale
 
 ```text
-registry/sources.csv + configs/runtime_sources.json
-                      │
-                      ▼
-                SourceRegistry
-                      │
-                Connector Router
-                      │
-      API / Web / PDF / Files / Bulk / Geo
-                      │
-                      ▼
-                     dlt
-                      │
-             pipeline PAR SOURCE
-                      │
-                      ▼
- data_lake/domains/<domain>/<source_id>/
-      ├── raw/
-      ├── tables/          ← Parquet dlt
-      ├── documents/
-      └── manifest.json
-                      │
-                      ▼
-             data_lake/catalog.json
-                      │
-        ┌─────────────┴──────────────┐
-        ▼                            ▼
- API/CLI/SQL local          pipeline équipe modèle
-                             clean/filter/dedup/...
+registry/sources.csv
+configs/runtime_sources.json
+configs/ci_gold_sources.json
+configs/ci_coverage.json
+          │
+          ▼
+    SourceRegistry
+          ▲
+          │ merge
+.ivoiredata/state/runtime_overrides.json
+          │
+          ▼
+      Engine
+          │
+  Connector Router
+          │
+ API / Web / PDF / CSV / Bulk / Geo
+          │
+          ▼
+         dlt
+          │
+ pipeline PAR SOURCE
+          │
+          ▼
+data_lake/domains/<domain>/<source_id>/
+├── raw/
+├── tables/
+├── documents/
+└── manifest.json  (schema v3)
+          │
+          ├──► catalog.json
+          ├──► audit
+          ├──► coverage-audit
+          ├──► quality-audit
+          └──► ci-gold
 ```
-
-## Pourquoi un pipeline par source
-
-Avant v0.6, plusieurs sources partageaient le même dataset filesystem dlt. v0.6 isole chaque source afin de garantir :
-
-- arborescence lisible ;
-- état/checkpoints isolés ;
-- évolution de schéma indépendante ;
-- requêtes source par source ;
-- suppression/restauration d'une source sans toucher les autres ;
-- handoff direct au pipeline d'entraînement.
 
 ## Control plane
 
-- `registry/sources.csv` : identité, producteur, domaine, URL, droits, priorité ;
-- `configs/runtime_sources.json` : connecteur, fréquence, auto-sync, options ;
-- `.ivoiredata/state/freshness.json` : dernier état opérationnel ;
-- état dlt : état technique de chaque pipeline source ;
-- `data_lake/catalog.json` : inventaire machine-readable du data lake.
+- `registry/sources.csv` : identité, domaine source, provider, URL, droits, priorité ;
+- `configs/runtime_sources.json` : paramètres de base historiques ;
+- `configs/ci_gold_sources.json` : overlay versionné pour les sources CI Gold ;
+- `.ivoiredata/state/runtime_overrides.json` : AUTO/MANUAL/DISABLED et fréquences utilisateur ;
+- `configs/ci_coverage.json` : taxonomie/matrice de couverture nationale ;
+- `.ivoiredata/state/freshness.json` : fraîcheur ;
+- `.ivoiredata/state/ci_gold_qualification.json` : fenêtre de stabilité réelle.
 
-Aucune base PostgreSQL n'est requise.
+Ordre de fusion :
+
+```text
+runtime_sources.json
+→ ci_gold_sources.json
+→ runtime_overrides.json
+```
+
+Les choix locaux gardent donc la priorité et survivent aux rebuilds.
 
 ## Data plane
 
+Chaque source garde un emplacement canonique unique :
+
 ```text
-data_lake/
-├── catalog.json
-└── domains/
-    ├── agriculture/
-    │   ├── civ_faostat/
-    │   └── civ_agriculture_ministry/
-    ├── health/
-    ├── education/
-    ├── economy/
-    ├── geography/
-    └── ...
+data_lake/domains/<source_domain>/<source_id>/
 ```
 
-Chaque package source contient :
+Un contenu multidomaine n’est pas dupliqué physiquement. Ses lignes portent `primary_domain` et `secondary_domains_json` pour permettre les index croisés downstream.
 
-- `raw/` : payload source original lorsque conservable ;
-- `tables/` : tables normalisées dlt en Parquet ;
-- `documents/` : pages/PDF/documentation collectés ;
-- `manifest.json` : provenance, statut, fréquence et inventaire.
+## Métadonnées nationales
 
-## Fraîcheur
+Le manifest v3 ajoute une section `metadata` avec :
+
+```text
+country_code=CIV
+country_name=Côte d'Ivoire
+source_domain
+primary_domain
+secondary_domains_json
+language
+document_type
+geographic_scope
+rights/access
+classification_status/confidence
+```
+
+Les documents Web portent ces métadonnées dans leurs Parquet. Data.gouv.ci et WDI ajoutent des champs `__ivoiredata_*` au niveau dataset/indicateur.
+
+## Classification
+
+La classification privilégie : domaine source → config → metadata upstream → titre/URL → règles lexicales déterministes. En cas d’incertitude, le système conserve `multidomain/PARTIAL` au lieu d’inventer.
+
+## Fraîcheur et scheduler
 
 ```text
 scheduler
   ↓
-FreshnessStore.due(source)
-  ├─ non → ne rien faire
+automatic_enabled ?
+  ├─ non → aucun sync automatique
   └─ oui
-      ↓
-   connector
-      ↓
- hash/signature/checksum/state
-      ↓
- source package
-      ↓
- manifest.json + catalog.json
+       ↓
+source enabled + auto_sync + due ?
+       ↓
+connector
+       ↓
+manifest/catalog/freshness
+       ↓
+QualificationStore.record_cycle()
 ```
 
-## Frontière avec l'entraînement
+Les sync manuels ne sont pas comptés dans la qualification CI Gold.
 
-IvoireData **ne fabrique plus officiellement le corpus/tokenizer**. Il livre le data lake vivant et organisé. Le pipeline de l'équipe modèle fige ensuite un état du `catalog.json` et construit ses releases.
+## CI Gold
 
-Voir :
-
-- [`DATA_HANDOFF_CONTRACT.md`](DATA_HANDOFF_CONTRACT.md)
-- [`DOWNSTREAM_AUTOMATION.md`](DOWNSTREAM_AUTOMATION.md)
-
-## Accès contrôlé
-
-Une source `MIXED` avec `metadata_only=true` autorise uniquement les pages/catalogues publics. Les routes et formats identifiés comme microdonnées sont filtrés avant téléchargement. Les sources `D_*` restent hors ingestion automatique.
-
-## Query layer
-
-Chaque pipeline filesystem dlt peut être interrogé localement via DuckDB/SQL. La CLI utilise :
-
-```bash
-ivoiredata query SOURCE_ID "SELECT ..."
+```text
+audit                état de livraison
+coverage-audit       couverture nationale
+quality-audit        qualité/métadonnées/droits
+qualification        stabilité 14 jours
+        │
+        ▼
+      ci-gold
+        │
+        ▼
+approved=true uniquement si tous les gates passent
 ```
 
-Les tables sont stockées en Parquet pour faciliter aussi l'accès direct par d'autres outils.
+Les preuves sont générées sous `data_lake/reports/ci-gold/`.
 
-## Extension
+## Sécurité et droits
 
-Ajouter une source = registre + runtime config + connecteur existant ou spécialisé + tests + documentation. Voir [`ADDING_SOURCE.md`](ADDING_SOURCE.md).
+- pas de contournement d’authentification/CAPTCHA/paywall ;
+- les sources D restent hors ingestion automatique ;
+- `metadata_only` ne permet que le contenu public autorisé ;
+- le TLS dégradé reste explicitement signalé ;
+- les droits suivent les données jusqu’au handoff.
+
+## Frontière downstream
+
+IvoireData livre le data lake CI. Le downstream prend ensuite un snapshot/freeze et réalise : droits → nettoyage → PII → qualité → dédup → corpus → tokenizer → shards → entraînement.
+
+IvoireData ne doit pas absorber ces responsabilités.
