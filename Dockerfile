@@ -24,9 +24,9 @@ FROM python:${PY_VERSION}-slim AS runtime
 ARG PUID
 ARG PGID
 LABEL org.opencontainers.image.title="IvoireData" \
-      org.opencontainers.image.description="Moteur local de collecte et qualification CI Gold de données Côte d'Ivoire" \
+      org.opencontainers.image.description="Moteur local de collecte incrémentale et qualification CI Gold de données Côte d'Ivoire" \
       org.opencontainers.image.source="https://github.com/bozz33/IvoireData" \
-      org.opencontainers.image.version="0.8.1" \
+      org.opencontainers.image.version="0.8.2" \
       org.opencontainers.image.licenses="MIT"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
