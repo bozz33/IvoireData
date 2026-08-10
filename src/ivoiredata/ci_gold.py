@@ -5,11 +5,11 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from .delivery import source_paths
+from .state_io import load_json
 
 if TYPE_CHECKING:
     from .engine import IvoireDataEngine
     from .models import SourceSpec
-
 
 _COVERAGE_WEIGHTS = {
     "COVERED": 1.0,
@@ -33,16 +33,22 @@ _REQUIRED_DOCUMENT_COLUMNS = {
 }
 _CRITICAL_CODES = {
     "MANIFEST_MISSING", "MANIFEST_SCHEMA_LEGACY", "EMPTY_DELIVERY",
-    "SYNC_ERROR", "RIGHTS_METADATA_MISSING",
+    "SYNC_ERROR", "RIGHTS_METADATA_MISSING", "UPSTREAM_PARTIAL_FAILURE",
+    "UPSTREAM_BACKLOG",
 }
 _SEVERITY_RANK = {"OK": 0, "ADVISORY": 1, "WARNING": 2, "CRITICAL": 3}
+_STRUCTURED_STATS_FILES = {
+    "civ_datagouv_catalog": "datagouv_sync_stats.json",
+    "civ_ilostat": "ilostat_sync_stats.json",
+    "civ_faostat": "faostat_sync_stats.json",
+    "civ_worldbank_wdi": "worldbank_wdi_sync_stats.json",
+    "civ_worldbank_projects": "worldbank_projects_sync_stats.json",
+    "civ_uis": "uis_sync_stats.json",
+}
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    data = load_json(path, {})
     return data if isinstance(data, dict) else {}
 
 
@@ -92,9 +98,29 @@ def _needs_ocr_files(root: Path) -> list[str]:
 def _issue_severity(spec: SourceSpec, issue: str) -> str:
     if issue == "DOCUMENTS_NEED_OCR":
         return "ADVISORY"
+    if issue == "UPSTREAM_IGNORED_ITEMS":
+        return "WARNING"
     if spec.priority.upper() == "P0" and issue in _CRITICAL_CODES:
         return "CRITICAL"
     return "WARNING"
+
+
+def _structured_upstream_stats(paths: dict[str, Path], spec: SourceSpec) -> tuple[dict[str, Any], list[str]]:
+    filename = _STRUCTURED_STATS_FILES.get(spec.source_id)
+    if not filename:
+        return {}, []
+    stats = _read_json(paths["raw"] / filename)
+    if not stats:
+        return {}, []
+    issues: list[str] = []
+    if int(stats.get("failed") or 0) > 0:
+        issues.append("UPSTREAM_PARTIAL_FAILURE")
+    if int(stats.get("backlog_count") or 0) > 0 or int(stats.get("deferred_budget") or 0) > 0 or int(stats.get("skipped_oversize") or 0) > 0:
+        issues.append("UPSTREAM_BACKLOG")
+    ignored = stats.get("ignored_http400_indicators") or []
+    if isinstance(ignored, list) and ignored:
+        issues.append("UPSTREAM_IGNORED_ITEMS")
+    return stats, issues
 
 
 def coverage_audit(engine: IvoireDataEngine) -> dict[str, Any]:
@@ -158,10 +184,7 @@ def coverage_audit(engine: IvoireDataEngine) -> dict[str, Any]:
             "notes": item.get("notes"),
         })
 
-    p0_blockers = [
-        row for row in rows
-        if row["priority"] == "P0" and row["status"] in {"PARTIAL", "MISSING", "UNRESOLVED"}
-    ]
+    p0_blockers = [row for row in rows if row["priority"] == "P0" and row["status"] in {"PARTIAL", "MISSING", "UNRESOLVED"}]
     score = 100.0 * weighted / weighted_max if weighted_max else 0.0
     return {
         "country_code": "CIV",
@@ -188,6 +211,8 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
     total_needs_ocr = 0
     total_zero_byte = 0
     legacy_manifests = 0
+    partial_upstreams = 0
+    backlog_upstreams = 0
 
     for spec in active:
         paths = source_paths(engine.settings, spec)
@@ -213,6 +238,13 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
         if not spec.rights_tier or not spec.access_tier:
             source_issues.append("RIGHTS_METADATA_MISSING")
 
+        upstream_stats, upstream_issues = _structured_upstream_stats(paths, spec)
+        source_issues.extend(upstream_issues)
+        if "UPSTREAM_PARTIAL_FAILURE" in upstream_issues:
+            partial_upstreams += 1
+        if "UPSTREAM_BACKLOG" in upstream_issues:
+            backlog_upstreams += 1
+
         zero_byte = _zero_byte_files(paths["root"])
         needs_ocr = _needs_ocr_files(paths["documents"])
         total_zero_byte += len(zero_byte)
@@ -233,7 +265,7 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
                 source_issues.append("DOCUMENT_METADATA_COLUMNS_INCOMPLETE")
 
         source_severities: list[str] = []
-        for issue in source_issues:
+        for issue in dict.fromkeys(source_issues):
             severity = _issue_severity(spec, issue)
             source_severities.append(severity)
             issues.append({
@@ -256,6 +288,7 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
             "needs_ocr_documents": len(needs_ocr),
             "needs_ocr_sidecars": needs_ocr[:20],
             "zero_byte_files": len(zero_byte),
+            "upstream_stats": upstream_stats,
             "severity": row_severity,
         })
 
@@ -277,6 +310,8 @@ def quality_audit(engine: IvoireDataEngine) -> dict[str, Any]:
             "document_sources": document_sources,
             "document_schema_complete": document_schema_complete,
             "document_schema_completeness_pct": round(schema_ratio * 100, 2),
+            "structured_partial_failure_sources": partial_upstreams,
+            "structured_backlog_sources": backlog_upstreams,
             "passed": critical_count == 0,
         },
         "issues": issues,
@@ -346,6 +381,7 @@ def ci_gold_report(engine: IvoireDataEngine) -> dict[str, Any]:
         "score_at_least_95": score >= 95.0,
         "no_p0_coverage_blocker": coverage["summary"]["p0_blockers"] == 0,
         "no_critical_quality_issue": quality["summary"]["critical_issues"] == 0,
+        "structured_upstreams_complete": quality["summary"]["structured_partial_failure_sources"] == 0 and quality["summary"]["structured_backlog_sources"] == 0,
         "no_active_empty": non_empty == active,
         "no_active_sync_error": non_error == active,
         "rights_complete": rights_ok == active,
@@ -389,6 +425,7 @@ def write_ci_gold_report(engine: IvoireDataEngine) -> dict[str, Any]:
         "quality.json": report["quality"],
         "qualification.json": report["qualification"],
         "audit.json": engine.audit(public_only=True),
+        "upstreams.json": engine.upstream_audit(),
         "sources.json": [spec.__dict__ for spec in engine.registry.all()],
     }
     for name, payload in artifacts.items():
@@ -403,6 +440,8 @@ def write_ci_gold_report(engine: IvoireDataEngine) -> dict[str, Any]:
         f"- Qualification elapsed: **{report['qualification']['elapsed_days']} days**\n"
         f"- Automatic sources covered: **{report['stability_coverage']['automatic_sources_exercised']}/{report['stability_coverage']['automatic_sources']}**\n"
         f"- Baseline AUTO sources: **{report['stability_coverage']['baseline_sources']}**\n"
+        f"- Structured upstream partial failures: **{report['quality']['summary']['structured_partial_failure_sources']}**\n"
+        f"- Structured upstream backlogs: **{report['quality']['summary']['structured_backlog_sources']}**\n"
         f"- NEEDS_OCR documents: **{report['quality']['summary']['needs_ocr_documents']}** (advisory)\n\n"
         "## Gates\n\n" + gates + "\n"
     )
