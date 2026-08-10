@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import mimetypes
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+
+from .state_io import atomic_write_json
 
 _SAFE = re.compile(r"[^a-zA-Z0-9_.-]+")
 
@@ -63,6 +64,6 @@ def save_snapshot(
         "local_file": filename,
     }
     sidecar = path.with_suffix(path.suffix + ".meta.json")
-    sidecar.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(sidecar, meta)
     result["local_path"] = str(path)
     return result
