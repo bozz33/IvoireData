@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.8.2 — official incremental upstreams
+
+### Correctness
+
+- Data.gouv.ci is now synchronized through the actual Data Fair contract: anonymous public catalogue with `page>=1`, `/full` bulk transfer when available, then official `/lines` fallback following the returned `next` cursor until absent.
+- Data.gouv failures are no longer silently collapsed into “dataset ignored”; sync statistics record catalogue size, downloaded/unchanged datasets, `/full` vs `/lines`, removals and exact failures.
+- ILOSTAT no longer treats `/data/indicator?ref_area=CIV` as country-wide data. It loads the official indicator TOC and requests every new/updated indicator with both `id=<indicator>` and `ref_area=CIV` in CSV format.
+- The unsafe RDS path remains disabled.
+- FAOSTAT no longer freezes collection to five domains. It reads the official `datasets_E.json` bulk catalogue, discovers current domains and excludes discontinued archives by default.
+
+### Incremental downloads
+
+- Added `.ivoiredata/state/upstreams.json` with persistent upstream versions, validators, cache paths and last network outcomes.
+- Version priority: official release/version metadata → ETag/Last-Modified/304 → SHA-256 fallback.
+- `--force` now means “check now”; identical already-materialized versions are not intentionally downloaded again.
+- Crash-safe replay: if a payload was downloaded but dlt did not commit the load, the next run can replay the local snapshot without another body transfer.
+- FAOSTAT uses official `DateUpdate/FileRows/FileSize/FileLocation` signatures and a bounded per-run transfer budget.
+- World Bank WDI uses official source `lastupdated` metadata before expensive indicator/data requests.
+- World Bank Projects, UIS, geoBoundaries and direct HTTP files use conditional HTTP where available and hashes otherwise.
+- Geofabrik PBF uses the official `.md5` sidecar first and HTTP validators as fallback.
+- Public web crawling uses HTTP validators per page and preserves cached child links across HTTP 304 responses.
+
+### Robustness
+
+- Freshness, runtime overrides, qualification state, upstream state and snapshot sidecars use atomic JSON writes.
+- Malformed JSON state is quarantined as `*.corrupt-<timestamp>` rather than preventing engine startup.
+- ILOSTAT requests retry 429/5xx/timeouts with bounded exponential backoff.
+- FAOSTAT enforces per-file and per-run transfer budgets; backlog is explicit and resumable.
+
+### Audit / CI Gold
+
+- Added `ivoiredata upstreams [source_id]`.
+- Added `GET /upstreams` and `GET /upstreams/{source_id}`.
+- Structured source reports are written under each source `raw/` directory.
+- CI Gold now blocks on `UPSTREAM_PARTIAL_FAILURE` and `UPSTREAM_BACKLOG` for priority P0 structured sources.
+- `ci-gold --write` includes `upstreams.json`.
+
+### Migration
+
+See `docs/UPSTREAM_INCREMENTAL.md`. Upgrade structured sources individually, verify immediate second runs do not transfer unchanged payloads, then restart the 14-day qualification only after structured backlogs/failures are zero.
+
 ## v0.8.1 — CI Gold completeness
 
 ### Added
