@@ -80,9 +80,26 @@ def _parquet_stats(path: Path) -> dict[str, int]:
 def _transport_security(spec: SourceSpec) -> str:
     if spec.source_url.lower().startswith("http://"):
         return "HTTP"
-    if spec.connector == "public_web" and spec.options.get("verify_ssl") is False:
+    # Tout connecteur dont les options désactivent la vérification TLS, pas seulement public_web.
+    if spec.options.get("verify_ssl") is False:
         return "DEGRADED_TLS"
     return "VERIFIED_TLS"
+
+
+# Connecteurs qui produisent des données métier structurées (tables CSV/JSON/API -> Parquet).
+# Un connecteur absent de cette liste sera classé selon ses fichiers (documents/raw/empty),
+# même s'il produit des lignes Parquet (ex. public_web produit des chunks textuels, pas
+# des données structurées ; osm_geofabrik produit un snapshot binaire).
+_STRUCTURED_CONNECTORS = frozenset({
+    "data_gouv_ci",
+    "world_bank_wdi",
+    "world_bank_projects",
+    "ilostat_ref_area",
+    "faostat_country",
+    "uis_country",
+    "geoboundaries",
+    "http_file",
+})
 
 
 def compute_delivery_status(
@@ -97,16 +114,32 @@ def compute_delivery_status(
     rows = int(tables.get("rows", 0))
     warnings: list[str] = []
 
+    is_structured = spec.connector in _STRUCTURED_CONNECTORS
+
     if spec.options.get("metadata_only"):
         delivery = "METADATA_ONLY" if (rows or documents["files"] or raw["files"]) else "EMPTY"
         if delivery != "EMPTY":
             warnings.append("METADATA_ONLY_SOURCE")
-    elif rows > 0:
+    elif spec.connector == "osm_geofabrik":
+        # OSM/Geofabrik produit un snapshot binaire (PBF), pas des tables structurées.
+        delivery = "SNAPSHOT_ONLY" if raw["files"] > 0 else "EMPTY"
+    elif spec.connector == "public_web":
+        # public_web produit des chunks de texte web dans des tables Parquet : ce sont
+        # des DOCUMENTS, pas des données structurées. Une ligne de metadata (OSM) ne
+        # compte pas non plus comme FULL_STRUCTURED.
+        if rows > 0 or documents["files"] > 0 or raw["files"] > 0:
+            delivery = "DOCUMENTS_ONLY"
+        else:
+            delivery = "EMPTY"
+    elif is_structured and rows > 0:
         delivery = "FULL_STRUCTURED"
     elif documents["files"] > 0:
         delivery = "DOCUMENTS_ONLY"
     elif raw["files"] > 0:
         delivery = "SNAPSHOT_ONLY"
+    elif rows > 0:
+        # Cas rare : connecteur inconnu qui produit quand même des lignes (futur-proof).
+        delivery = "FULL_STRUCTURED"
     else:
         delivery = "EMPTY"
 
