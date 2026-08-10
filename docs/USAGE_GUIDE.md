@@ -1,127 +1,81 @@
-# Guide d’utilisation IvoireData v0.7.2
+# Guide d’utilisation IvoireData v0.8.0
 
-Ce guide couvre l’installation, le démarrage, les synchronisations manuelles et automatiques, le contrôle dynamique des sources, l’audit, l’API, la sauvegarde et le handoff downstream.
+Ce guide couvre l’installation, la collecte manuelle/automatique, les contrôles dynamiques, les audits CI Gold, la qualification de stabilité, la sauvegarde et le handoff downstream.
 
-> IvoireData s’arrête à la livraison du data lake. Le nettoyage ML avancé, la déduplication du corpus, le tokenizer et l’entraînement appartiennent au pipeline downstream.
+> IvoireData reste le moteur de collecte/livraison. Nettoyage ML avancé, PII, déduplication, corpus, tokenizer et entraînement restent downstream.
 
-## 1. Prérequis
+## 1. Installation
 
-### Docker — recommandé
-
-- Git ;
-- Docker Engine / Docker Desktop ;
-- Docker Compose v2 ;
-- accès Internet aux sources publiques ;
-- espace disque suffisant pour `data_lake/`.
-
-### Sans Docker
-
-- Python 3.10+ ;
-- Git ;
-- environnement virtuel Python recommandé.
-
-## 2. Installation / mise à jour
+Prérequis recommandés : Git, Docker Engine/Desktop, Docker Compose v2, accès Internet et espace disque local.
 
 ```bash
 git clone https://github.com/bozz33/IvoireData.git
 cd IvoireData
-```
-
-Si le dépôt existe déjà :
-
-```bash
-git status
-git pull
-```
-
-Ne jamais supprimer `data_lake/` ou `.ivoiredata/` pendant une mise à jour.
-
-Sans Docker :
-
-```bash
-python -m venv .venv
-# Linux/macOS
-source .venv/bin/activate
-# Windows PowerShell : .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
-```
-
-## 3. Démarrage Docker
-
-```bash
 docker compose build
 docker compose --profile run up -d
 ```
 
-Vérifier :
+Mise à jour :
 
 ```bash
-docker compose ps
-docker compose logs -f api
-docker compose logs -f scheduler
+git status
+git pull
+docker compose build
+docker compose --profile run up -d
 ```
 
-Arrêt :
+Ne jamais supprimer `data_lake/` ou `.ivoiredata/` lors d’une mise à jour.
 
-```bash
-docker compose down
-```
-
-Les données et réglages dynamiques restent sur l’hôte.
-
-## 4. Stockage
+## 2. Stockage
 
 ```text
 data_lake/
 ├── catalog.json
-└── domains/
-    └── <domain>/
-        └── <source_id>/
-            ├── raw/
-            ├── tables/
-            ├── documents/
-            └── manifest.json
+├── reports/ci-gold/
+└── domains/<domain>/<source_id>/
+    ├── raw/
+    ├── tables/
+    ├── documents/
+    └── manifest.json
 
 .ivoiredata/state/
 ├── freshness.json
-└── runtime_overrides.json
+├── runtime_overrides.json
+└── ci_gold_qualification.json
 ```
 
-- `raw/` : snapshots/fichiers source ;
-- `tables/` : Parquet ;
-- `documents/` : pages Web/PDF ;
-- `manifest.json` : provenance, droits, métriques, fraîcheur, transport, warnings ;
-- `freshness.json` : dernier état de synchronisation ;
-- `runtime_overrides.json` : réglages utilisateur AUTO/MANUAL/DISABLED et scheduler.
+- `configs/runtime_sources.json` : configuration historique/par défaut ;
+- `configs/ci_gold_sources.json` : overlay versionné CI Gold ;
+- `.ivoiredata/state/runtime_overrides.json` : choix utilisateur persistants ;
+- `configs/ci_coverage.json` : matrice nationale de couverture.
 
-`configs/runtime_sources.json` reste la configuration par défaut versionnée. Les changements utilisateur sont séparés dans `.ivoiredata/state/runtime_overrides.json` afin de survivre aux rebuilds Docker et d’être partagés entre `api`, `scheduler` et `sync-once`.
-
-## 5. Diagnostic de base
+## 3. Diagnostic de base
 
 ```bash
 ivoiredata --help
-ivoiredata coverage
 ivoiredata sources --public
-ivoiredata status --public
+ivoiredata coverage
 ivoiredata audit
-ivoiredata inventory
+ivoiredata coverage-audit
+ivoiredata quality-audit
 ivoiredata updates status
+ivoiredata qualification status
+ivoiredata ci-gold
 ```
 
 Avec Docker :
 
 ```bash
 docker compose exec api ivoiredata audit
-docker compose exec api ivoiredata updates status
+docker compose exec api ivoiredata coverage-audit
+docker compose exec api ivoiredata quality-audit
 ```
 
-## 6. Synchronisation manuelle
+## 4. Synchronisation manuelle
 
 Une source :
 
 ```bash
-ivoiredata sync civ_worldbank_wdi
 ivoiredata sync civ_faostat --force
 ```
 
@@ -131,214 +85,174 @@ Toutes les sources publiques actives :
 ivoiredata sync --all-public --force
 ```
 
-Avec Docker :
-
-```bash
-docker compose --profile sync run --rm sync-once \
-  sh -c "ivoiredata sync civ_faostat --force"
-```
-
-ou :
+Docker :
 
 ```bash
 docker compose --profile sync run --rm sync-once \
   sh -c "ivoiredata sync --all-public --force"
 ```
 
-La synchronisation manuelle reste disponible même lorsque les mises à jour automatiques sont globalement désactivées.
+La synchronisation manuelle reste possible même si l’automatisation globale est coupée.
 
-## 7. Contrôle global des mises à jour automatiques
-
-État :
+## 5. Mise à jour automatique
 
 ```bash
 ivoiredata updates status
-```
-
-Désactiver l’automatique :
-
-```bash
 ivoiredata updates disable
-```
-
-Réactiver :
-
-```bash
 ivoiredata updates enable
-```
-
-Changer l’intervalle de réveil du scheduler, minimum 300 secondes :
-
-```bash
 ivoiredata updates interval 1800
 ```
 
-Avec Docker, exécuter par exemple :
-
-```bash
-docker compose exec api ivoiredata updates disable
-docker compose exec api ivoiredata updates enable
-docker compose exec api ivoiredata updates interval 1800
-```
-
-Le scheduler relit l’état persistant à chaque cycle. `updates disable` empêche réellement ses synchronisations ; il continue seulement à tourner en attente d’une éventuelle réactivation.
-
-## 8. Modes par source
-
-Voir le mode :
+Modes source :
 
 ```bash
 ivoiredata source status civ_faostat
-```
-
-Automatique :
-
-```bash
 ivoiredata source auto civ_faostat
-```
-
-Manuel uniquement :
-
-```bash
 ivoiredata source manual civ_faostat
-```
-
-Désactiver totalement :
-
-```bash
 ivoiredata source disable civ_faostat
-```
-
-Réactiver :
-
-```bash
 ivoiredata source enable civ_faostat
-```
-
-Changer `refresh_hours` :
-
-```bash
 ivoiredata source refresh civ_faostat 72
 ```
 
 Sémantique :
 
 ```text
-enabled=false                         -> DISABLED
-enabled=true + auto_sync=false       -> MANUAL
-enabled=true + auto_sync=true        -> AUTOMATIC
+enabled=false                   -> DISABLED
+enabled=true, auto_sync=false   -> MANUAL
+enabled=true, auto_sync=true    -> AUTOMATIC
 ```
 
-Une source `DISABLED` est exclue du scheduler, de `sync --all-public` et des appels directs `sync <source_id>` jusqu’à réactivation.
+Les overrides sont persistés dans `.ivoiredata/state/runtime_overrides.json` et partagés entre les conteneurs.
 
-Voir aussi [`DYNAMIC_UPDATES.md`](DYNAMIC_UPDATES.md).
+## 6. Manifest v3
 
-## 9. Scheduler
+Chaque source reçoit un manifest avec quatre dimensions opérationnelles :
 
-Une passe :
+- `sync.status` ;
+- `delivery.status` ;
+- `freshness.status` ;
+- `transport.security`.
 
-```bash
-ivoiredata scheduler --once
+Et une section nationale `metadata` contenant notamment :
+
+```text
+country_code=CIV
+country_name=Côte d'Ivoire
+source_domain
+primary_domain
+secondary_domains_json
+language
+document_type
+geographic_scope
+provider
+rights_tier
+access_tier
+classification_status
+classification_confidence
 ```
 
-Permanent :
+## 7. Delivery status
 
-```bash
-ivoiredata scheduler
-```
+- `FULL_STRUCTURED` : vraies données métier structurées ;
+- `DOCUMENTS_ONLY` : pages/PDF/chunks textuels ;
+- `SNAPSHOT_ONLY` : payload brut/binaire, ex. OSM PBF ;
+- `METADATA_ONLY` : limitation volontaire ;
+- `EMPTY` : aucune livraison exploitable.
 
-Intervalle ponctuel explicite :
+`SUCCESS` ne suffit jamais à déclarer une source couverte.
 
-```bash
-ivoiredata scheduler --interval 1800
-```
+## 8. Classification des documents
 
-Avec Docker :
+Les documents `public_web` reçoivent directement les métadonnées CI Gold dans le Parquet. Pour une source à domaine unique, le domaine de la source est canonique. Pour une source multidomaine, les titres/métadonnées sont classifiés avec des règles déterministes conservatrices.
 
-```bash
-docker compose --profile run up -d scheduler
-```
+Data.gouv.ci et World Bank WDI reçoivent aussi des champs `__ivoiredata_*` au niveau dataset/indicateur.
 
-Par défaut, le scheduler utilise `scheduler_interval_seconds` du runtime persistant. Une variable d’environnement `IVOIREDATA_SCHEDULER_INTERVAL` explicitement définie peut la remplacer pour un déploiement particulier.
-
-## 10. Lire l’audit
+## 9. Audit normal
 
 ```bash
 ivoiredata audit
 ```
 
-### `sync_status`
-
-- `SUCCESS` ;
-- `ERROR` ;
-- `NEVER`.
-
-### `delivery_status`
-
-- `FULL_STRUCTURED` : données métier structurées ;
-- `DOCUMENTS_ONLY` : pages/PDF/chunks texte ;
-- `SNAPSHOT_ONLY` : snapshot brut/binaire, ex. OSM PBF ;
-- `METADATA_ONLY` : métadonnées publiques uniquement ;
-- `EMPTY` : aucune livraison exploitable.
-
-### `freshness_status`
-
-- `FRESH` ;
-- `DUE` ;
-- `STALE` ;
-- `NEVER_SYNCED`.
-
-### `transport_security`
-
-- `VERIFIED_TLS` ;
-- `DEGRADED_TLS` ;
-- `HTTP`.
-
-Ne jamais utiliser `sync_status=SUCCESS` seul comme preuve de couverture.
-
-## 11. Vérifier une source
-
-```bash
-ivoiredata source-path civ_faostat
-ivoiredata source status civ_faostat
-```
-
-Inspecter ensuite :
+Le résumé distingue maintenant :
 
 ```text
-manifest.json
-raw/
-tables/
-documents/
+rows.structured
+rows.documents
+rows.total_parquet
+transport.VERIFIED_TLS
+transport.DEGRADED_TLS
 ```
 
-Champs importants :
-
-```text
-schema_version
-sync.status
-delivery.status
-delivery.rows
-freshness.status
-transport.security
-warnings
-rights
-```
-
-## 12. Requêtes locales
+## 10. Audit de couverture nationale
 
 ```bash
-ivoiredata query civ_worldbank_wdi \
-  "SELECT * FROM worldbank_wdi LIMIT 20"
+ivoiredata coverage-audit
 ```
 
-Les Parquet sont aussi utilisables avec DuckDB, pandas ou PyArrow.
+La matrice est `configs/ci_coverage.json`.
 
-## 13. API locale
+Statuts : `COVERED`, `PARTIAL`, `CONTROLLED`, `UNAVAILABLE`, `UNRESOLVED`, `MISSING`.
+
+Un P0 `MISSING`/`UNRESOLVED` bloque CI Gold.
+
+## 11. Audit qualité
 
 ```bash
-uvicorn ivoiredata.api:app --host 127.0.0.1 --port 8000
+ivoiredata quality-audit
 ```
+
+Il vérifie notamment :
+
+- manifest ;
+- métadonnées nationales ;
+- droits ;
+- `EMPTY`/`ERROR` P0 ;
+- colonnes documentaires CI Gold.
+
+Après migration depuis v0.7.x, un full sync forcé est requis afin de régénérer les manifests v3 et les Parquet documentaires enrichis.
+
+## 12. Qualification 14 jours
+
+Démarrer après un full sync propre :
+
+```bash
+ivoiredata qualification start
+```
+
+Consulter :
+
+```bash
+ivoiredata qualification status
+```
+
+Le scheduler enregistre automatiquement les cycles. Les sync manuels ne comptent pas.
+
+Qualification réussie seulement avec :
+
+- >=14 jours réels ;
+- >=14 cycles scheduler ;
+- 0 cycle automatique avec erreur ;
+- 0 sync automatique en erreur.
+
+## 13. CI Gold
+
+```bash
+ivoiredata ci-gold
+```
+
+Le score combine couverture, qualité/provenance, classification, fraîcheur, stabilité, droits et handoff.
+
+Pour écrire le dossier de preuve :
+
+```bash
+ivoiredata ci-gold --write
+```
+
+Sortie : `data_lake/reports/ci-gold/`.
+
+CI Gold final exige `approved=true`, pas seulement un score élevé.
+
+## 14. API
 
 Endpoints principaux :
 
@@ -347,70 +261,32 @@ GET  /health
 GET  /sources
 GET  /status
 GET  /coverage
+GET  /coverage-audit
+GET  /quality-audit
 GET  /audit
-GET  /inventory
+GET  /ci-gold
+POST /ci-gold/report
+GET  /qualification
+POST /qualification/start
 GET  /settings/updates
 PUT  /settings/updates
 GET  /sources/{source_id}/settings
 PUT  /sources/{source_id}/settings
-GET  /sources/{source_id}/path
 POST /sync/{source_id}
 GET  /search/documents
 POST /query/source/{source_id}
 ```
 
-Exemple pour couper l’automatique :
+## 15. Interroger les Parquet
 
 ```bash
-curl -X PUT http://127.0.0.1:8000/settings/updates \
-  -H "Content-Type: application/json" \
-  -d '{"automatic_enabled":false}'
+ivoiredata query civ_worldbank_wdi \
+  "SELECT * FROM worldbank_wdi LIMIT 20"
 ```
 
-Exemple source en mode manuel :
+Les Parquet peuvent aussi être lus avec DuckDB, pandas et PyArrow.
 
-```bash
-curl -X PUT http://127.0.0.1:8000/sources/civ_faostat/settings \
-  -H "Content-Type: application/json" \
-  -d '{"update_mode":"MANUAL","refresh_hours":72}'
-```
-
-## 14. Connecteurs clés
-
-- Data.gouv.ci : données structurées `/full` ;
-- World Bank WDI / Projects : API structurée + raw ;
-- ILOSTAT : CSV CIV, `obs_status` conservé ;
-- FAOSTAT : ZIP bulk filtrés Côte d’Ivoire ;
-- UNESCO UIS : API `geoUnit=CIV` ;
-- `public_web` : documents, pas données métier structurées ;
-- OSM/Geofabrik : PBF `SNAPSHOT_ONLY` ;
-- ANStat/NADA : `METADATA_ONLY` selon politique actuelle.
-
-## 15. Warnings
-
-- `EMPTY_AFTER_SUCCESS` : succès technique mais aucune donnée utile ;
-- `SYNC_ERROR_WITH_STALE_DATA` : ancienne livraison conservée après échec upstream ;
-- `TLS_VERIFICATION_DISABLED` : TLS non vérifié, donc `DEGRADED_TLS` ;
-- `METADATA_ONLY_SOURCE` : limitation volontaire aux métadonnées.
-
-## 16. Diagnostic incident
-
-Ordre conseillé :
-
-1. `ivoiredata audit` ;
-2. `ivoiredata updates status` ;
-3. `ivoiredata status --public` ;
-4. ouvrir le `manifest.json` ;
-5. lire les logs Docker ;
-6. vérifier l’upstream ;
-7. corriger le connecteur si nécessaire ;
-8. ajouter un test de régression ;
-9. resynchroniser uniquement la source ;
-10. refaire l’audit.
-
-Une erreur upstream ne doit jamais effacer automatiquement la dernière livraison valide.
-
-## 17. Sauvegarde
+## 16. Sauvegarde
 
 Sauvegarder sur un second disque :
 
@@ -419,28 +295,30 @@ data_lake/
 .ivoiredata/
 ```
 
-Le second dossier contient à la fois la fraîcheur et les préférences dynamiques. GitHub contient le code/config/docs, pas les données réelles.
+Le second dossier contient les checkpoints, overrides et la qualification CI Gold.
 
-## 18. Mise à jour du moteur sans perdre les réglages
+## 17. Incident upstream
 
-```bash
-git pull
-docker compose build
-docker compose --profile run up -d
-```
+Ordre conseillé :
 
-Puis :
+1. `ivoiredata audit` ;
+2. `ivoiredata quality-audit` ;
+3. inspecter `manifest.json` ;
+4. lire les logs Docker ;
+5. vérifier l’upstream ;
+6. corriger le connecteur si nécessaire ;
+7. ajouter un test ;
+8. resynchroniser uniquement la source.
 
-```bash
-docker compose exec api ivoiredata updates status
-docker compose exec api ivoiredata audit
-```
+Une erreur upstream ne doit pas supprimer la dernière livraison valide.
 
-Les réglages dynamiques restent dans `.ivoiredata/state/runtime_overrides.json` et ne sont pas écrasés par le `git pull` ou le rebuild.
+## 18. Droits
+
+Les tiers A/B/C/D restent la politique de référence. Ne jamais contourner authentification, CAPTCHA, paywall, consentement ou restriction de licence pour améliorer artificiellement la couverture.
 
 ## 19. Handoff downstream
 
-Le downstream consomme notamment :
+Le downstream consomme :
 
 ```text
 data_lake/catalog.json
@@ -448,53 +326,30 @@ data_lake/domains/**/manifest.json
 data_lake/domains/**/tables/*.parquet
 data_lake/domains/**/documents/*
 data_lake/domains/**/raw/*
+data_lake/reports/ci-gold/*
 ```
 
-Chaîne :
+Puis : droits → nettoyage → PII → qualité → dédup → corpus → tokenizer → packing/sharding → entraînement.
 
-```text
-freeze/snapshot
-→ droits
-→ nettoyage
-→ filtres qualité
-→ PII
-→ déduplication
-→ corpus versionné
-→ tokenizer
-→ tokenisation
-→ packing/sharding
-→ entraînement
-```
-
-Voir `DATA_HANDOFF_CONTRACT.md`, `DOWNSTREAM_AUTOMATION.md` et `RIGHTS_AND_ACCESS.md`.
-
-## 20. Validation avant release
+## 20. Migration v0.7.2 → v0.8.0
 
 ```bash
-python -m pytest -q
-ivoiredata coverage
-ivoiredata updates status
-ivoiredata sync --all-public --force
-ivoiredata audit
+git pull
+docker compose build
+docker compose --profile run up -d
+
+docker compose --profile sync run --rm sync-once \
+  sh -c "ivoiredata sync --all-public --force"
+
+docker compose exec api ivoiredata audit
+docker compose exec api ivoiredata coverage-audit
+docker compose exec api ivoiredata quality-audit
 ```
 
-Le bilan doit distinguer au minimum :
+Lorsque ces contrôles sont propres :
 
-```text
-FULL_STRUCTURED
-DOCUMENTS_ONLY
-SNAPSHOT_ONLY
-METADATA_ONLY
-EMPTY
-DEGRADED_TLS
+```bash
+docker compose exec api ivoiredata qualification start
 ```
 
-Et tester explicitement :
-
-```text
-updates disable -> scheduler ne synchronise rien
-sync manuel -> fonctionne malgré updates disable
-source manual -> absente de la sélection automatique
-source disable -> bloquée même en sync direct
-rebuild/restart -> runtime_overrides.json conservé
-```
+Ne pas annoncer CI Gold final avant la fin réelle de la fenêtre de qualification.
