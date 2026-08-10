@@ -44,8 +44,6 @@ def _items(payload: Any) -> list[dict[str, Any]]:
 
 
 def _signature(meta: dict[str, Any]) -> str:
-    # Data Fair exposes update metadata and row/size information. The complete subset
-    # below deliberately changes when either data or schema-relevant metadata changes.
     keys = (
         "id", "slug", "updatedAt", "updated", "modified", "dataUpdatedAt",
         "finalizedAt", "size", "fileSize", "count", "lines", "version", "status",
@@ -85,12 +83,7 @@ def _request_json(session, url: str, timeout: int = 120, *, params: dict[str, An
 
 
 def _discover(session, page_size: int = 1000) -> list[dict[str, Any]]:
-    """Discover datasets visible to an anonymous Data Fair user.
-
-    Data Fair's public catalogue is permission-aware: anonymous callers only see
-    opendata datasets. We page defensively even though data.gouv.ci is currently
-    small enough for a single 1000-item response.
-    """
+    """Discover datasets visible to an anonymous Data Fair user."""
     collected: list[dict[str, Any]] = []
     seen: set[str] = set()
     page = 1
@@ -165,18 +158,17 @@ def _full_download(session, dsid: str):
     return response, parsed
 
 
-def _lines_download(session, dsid: str, *, snapshot_dir: Path | None, page_size: int = 1000) -> tuple[list[dict[str, Any]], list[dict[str, object]], str]:
+def _lines_download(session, dsid: str, *, snapshot_dir: Path | None, source_id: str,
+                    page_size: int = 1000) -> tuple[list[dict[str, Any]], dict[str, object] | None, str]:
     """Use Data Fair's documented per-dataset /lines API with pagination."""
     url = f"{API}/datasets/{quote(dsid, safe='')}/lines"
     page = 1
     rows: list[dict[str, Any]] = []
-    snapshots: list[dict[str, object]] = []
     seen_first_ids: set[str] = set()
     while True:
         response, payload = _request_json(session, url, timeout=240, params={"size": page_size, "page": page})
         batch = _items(payload)
         if not batch and page == 1:
-            # Some Data Fair deployments use zero-based pages.
             response, payload = _request_json(session, url, timeout=240, params={"size": page_size, "page": 0})
             batch = _items(payload)
         if batch:
@@ -185,15 +177,6 @@ def _lines_download(session, dsid: str, *, snapshot_dir: Path | None, page_size:
                 break
             if first:
                 seen_first_ids.add(first)
-        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        snapshots.append(save_snapshot(
-            snapshot_dir,
-            source_id="civ_datagouv_catalog",
-            url=response.url,
-            content=raw,
-            content_type="application/json",
-            name=f"{dsid}-lines-page-{page:05d}.json",
-        ))
         rows.extend(batch)
         total = payload.get("total") if isinstance(payload, dict) else None
         if not batch or len(batch) < page_size:
@@ -203,11 +186,42 @@ def _lines_download(session, dsid: str, *, snapshot_dir: Path | None, page_size:
         page += 1
         if page > 100000:
             raise RuntimeError(f"/lines pagination exceeded safety limit for {dsid}")
-    return rows, snapshots, url
+    # Store one replayable canonical snapshot. Per-page snapshots would force another
+    # network transfer after a crash because a single page cannot reconstruct the dataset.
+    canonical = json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    snapshot = save_snapshot(
+        snapshot_dir,
+        source_id=source_id,
+        url=url,
+        content=canonical,
+        content_type="application/json",
+        name=f"{dsid}-lines.json",
+    ) if snapshot_dir is not None else None
+    return rows, snapshot, url
+
+
+def _cached_rows(upstream: UpstreamState, source_id: str, artifact: str, signature: str) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
+    state = upstream.get(source_id, artifact)
+    path = upstream.cached_path(source_id, artifact, signature)
+    if path is None:
+        return None
+    method = str(state.get("method") or "").upper()
+    try:
+        if method == "FULL":
+            rows = list(_rows(path.read_bytes()))
+        elif method == "LINES":
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            rows = _items(payload) if isinstance(payload, dict) else [x for x in payload if isinstance(x, dict)]
+        else:
+            return None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return rows, state
 
 
 def data_gouv_ci_resource(
     *,
+    source_id: str = "civ_datagouv_catalog",
     dataset_ids: list[str] | None = None,
     limit: int | None = None,
     force: bool = False,
@@ -225,7 +239,7 @@ def data_gouv_ci_resource(
     def resource():
         session = requests.Session()
         session.headers.update({"User-Agent": user_agent})
-        legacy_state = dlt.current.resource_state().setdefault("dataset_signatures", {})
+        loaded_signatures = dlt.current.resource_state().setdefault("dataset_signatures", {})
         upstream = UpstreamState(upstream_state_path) if upstream_state_path else None
         catalog = _discover(session)
         wanted = set(dataset_ids or [])
@@ -258,6 +272,7 @@ def data_gouv_ci_resource(
             "catalog_visible_anonymous": len(catalog_ids),
             "selected": len(selected),
             "unchanged": 0,
+            "replayed_from_local_cache": 0,
             "downloaded": 0,
             "via_full": 0,
             "via_lines": 0,
@@ -266,17 +281,17 @@ def data_gouv_ci_resource(
             "removed_upstream": 0,
             "business_rows": 0,
             "failures": [],
-            "force_semantics": "force rechecks catalogue; unchanged dataset signatures are never re-downloaded",
+            "force_semantics": "force bypasses freshness scheduling but unchanged dataset signatures are never re-downloaded",
         }
 
         if upstream:
             previous = {
                 str(row.get("artifact_id", ""))[8:]
-                for row in upstream.source_rows("civ_datagouv_catalog")
+                for row in upstream.source_rows(source_id)
                 if str(row.get("artifact_id", "")).startswith("dataset:") and row.get("downloaded")
             }
             for removed in sorted(previous - catalog_ids):
-                upstream.mark_removed("civ_datagouv_catalog", f"dataset:{removed}")
+                upstream.mark_removed(source_id, f"dataset:{removed}")
                 stats["removed_upstream"] += 1
 
         for meta in selected:
@@ -284,17 +299,10 @@ def data_gouv_ci_resource(
             assert dsid is not None
             sig = _signature(meta)
             artifact = f"dataset:{dsid}"
-            # Preserve the old dlt state during migration so the first v0.8.2 run does
-            # not re-download datasets that v0.8.1 already proved unchanged.
-            if (upstream and upstream.signature_matches("civ_datagouv_catalog", artifact, sig)) or legacy_state.get(dsid) == sig:
-                if upstream and not upstream.signature_matches("civ_datagouv_catalog", artifact, sig):
-                    upstream.mark_downloaded(
-                        "civ_datagouv_catalog", artifact,
-                        url=f"{PORTAL}/datasets/{dsid}", signature=sig,
-                        sha256=None, size_bytes=None, method="ADOPTED_V081_STATE",
-                    )
-                elif upstream:
-                    upstream.mark_unchanged("civ_datagouv_catalog", artifact, signature=sig, url=f"{PORTAL}/datasets/{dsid}")
+            # dlt state is the authoritative proof that this exact version reached tables/.
+            if loaded_signatures.get(dsid) == sig:
+                if upstream:
+                    upstream.mark_unchanged(source_id, artifact, signature=sig, url=f"{PORTAL}/datasets/{dsid}")
                 stats["unchanged"] += 1
                 continue
 
@@ -302,44 +310,71 @@ def data_gouv_ci_resource(
             method = "FULL"
             source_url = f"{API}/datasets/{quote(dsid, safe='')}/full"
             snapshot: dict[str, object] | None = None
-            full_error: Exception | None = None
-            full_status: int | None = None
-            try:
-                response, rows = _full_download(session, dsid)
-                snapshot = save_snapshot(
-                    snapshot_dir,
-                    source_id="civ_datagouv_catalog",
-                    url=response.url,
-                    content=response.content,
-                    content_type=response.headers.get("content-type"),
-                    name=f"{dsid}.csv",
-                )
-                source_url = response.url
-                stats["via_full"] += 1
-            except Exception as exc:
-                full_error = exc
-                full_status = getattr(getattr(exc, "response", None), "status_code", None)
-                method = "LINES"
+
+            replay = _cached_rows(upstream, source_id, artifact, sig) if upstream else None
+            if replay is not None:
+                rows, cached_state = replay
+                method = str(cached_state.get("method") or "FULL").upper()
+                source_url = str(cached_state.get("url") or source_url)
+                cached_path = upstream.cached_path(source_id, artifact, sig) if upstream else None
+                snapshot = {
+                    "sha256": cached_state.get("sha256"),
+                    "size_bytes": cached_state.get("size_bytes"),
+                    "local_path": str(cached_path) if cached_path else None,
+                }
+                stats["replayed_from_local_cache"] += 1
+            else:
+                full_error: Exception | None = None
+                full_status: int | None = None
                 try:
-                    rows, line_snapshots, lines_url = _lines_download(session, dsid, snapshot_dir=snapshot_dir)
-                    source_url = lines_url
-                    if line_snapshots:
-                        snapshot = line_snapshots[0]
-                    stats["via_lines"] += 1
-                except Exception as lines_exc:
-                    status = getattr(getattr(lines_exc, "response", None), "status_code", None)
-                    error = f"/full: {full_error}; /lines: {lines_exc}"
-                    stats["failed"] += 1
-                    stats["failures"].append({"dataset_id": dsid, "full_status": full_status, "lines_status": status, "error": error[:1000]})
-                    if upstream:
-                        upstream.mark_error("civ_datagouv_catalog", artifact, url=source_url, error=error, status_code=status, method="FULL+LINES")
-                    print(f"[data_gouv_ci] dataset non récupérable {dsid} -> {error}", flush=True)
-                    continue
+                    response, rows = _full_download(session, dsid)
+                    snapshot = save_snapshot(
+                        snapshot_dir,
+                        source_id=source_id,
+                        url=response.url,
+                        content=response.content,
+                        content_type=response.headers.get("content-type"),
+                        name=f"{dsid}.csv",
+                    )
+                    source_url = response.url
+                    stats["via_full"] += 1
+                except Exception as exc:
+                    full_error = exc
+                    full_status = getattr(getattr(exc, "response", None), "status_code", None)
+                    method = "LINES"
+                    try:
+                        rows, snapshot, lines_url = _lines_download(
+                            session, dsid, snapshot_dir=snapshot_dir, source_id=source_id
+                        )
+                        source_url = lines_url
+                        stats["via_lines"] += 1
+                    except Exception as lines_exc:
+                        status = getattr(getattr(lines_exc, "response", None), "status_code", None)
+                        error = f"/full: {full_error}; /lines: {lines_exc}"
+                        stats["failed"] += 1
+                        stats["failures"].append({"dataset_id": dsid, "full_status": full_status, "lines_status": status, "error": error[:1000]})
+                        if upstream:
+                            upstream.mark_error(source_id, artifact, url=source_url, error=error, status_code=status, method="FULL+LINES")
+                        print(f"[data_gouv_ci] dataset non récupérable {dsid} -> {error}", flush=True)
+                        continue
+
+                if upstream:
+                    upstream.mark_downloaded(
+                        source_id, artifact,
+                        url=source_url,
+                        signature=sig,
+                        sha256=str(snapshot.get("sha256")) if snapshot else None,
+                        size_bytes=int(snapshot.get("size_bytes") or 0) if snapshot else None,
+                        method=method,
+                        rows=len(rows),
+                        local_path=str(snapshot.get("local_path") or "") or None if snapshot else None,
+                    )
+                stats["downloaded"] += 1
 
             if not rows:
                 stats["empty"] += 1
             classified = classifications.get(dsid) or _classification(meta, dsid, base)
-            raw_sha = str(snapshot.get("sha256")) if snapshot else None
+            raw_sha = str(snapshot.get("sha256")) if snapshot and snapshot.get("sha256") else None
             raw_path = snapshot.get("local_path") if snapshot else None
             table = _safe_table(dsid)
             for idx, row in enumerate(rows):
@@ -354,19 +389,8 @@ def data_gouv_ci_resource(
                     **classified,
                 })
                 yield dlt.mark.with_table_name(item, table)
-            legacy_state[dsid] = sig
-            stats["downloaded"] += 1
+            loaded_signatures[dsid] = sig
             stats["business_rows"] += len(rows)
-            if upstream:
-                upstream.mark_downloaded(
-                    "civ_datagouv_catalog", artifact,
-                    url=source_url,
-                    signature=sig,
-                    sha256=raw_sha,
-                    size_bytes=int(snapshot.get("size_bytes") or 0) if snapshot else None,
-                    method=method,
-                    rows=len(rows),
-                )
 
         if snapshot_dir:
             atomic_write_json(snapshot_dir / "datagouv_sync_stats.json", stats)
