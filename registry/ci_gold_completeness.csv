@@ -1,0 +1,20 @@
+source_id,title,domain,provider,source_url,rights_tier,access_tier,priority
+civ_famille_gender,Genre famille enfant et statistiques sociales,gender,Ministère de la Femme de la Famille et de l'Enfant,https://www.famille.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_youth,Jeunesse insertion et service civique,youth,Ministère de la Promotion de la Jeunesse de l'Insertion Professionnelle et du Service Civique,https://web.jeunesse.gouv.ci/accueil,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_commerce_industry,Commerce industrie artisanat et statistiques sectorielles,industry,Ministère du Commerce et de l'Industrie,https://www.commerce.gouv.ci/accueil,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_cepici,Investissement création d'entreprise et agréments,investment,CEPICI,https://cepici.africa/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_digital_ministry,Transition numérique innovation et politique cyber,digital,Ministère de la Transition Numérique et de l'Innovation Technologique,https://www.telecom.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_interior_decentralization,Administration territoriale décentralisation migration et sécurité intérieure,decentralization,Ministère de l'Intérieur et de la Sécurité,https://interieur.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_onef,Marché du travail emploi formation migration et pauvreté,labor,Observatoire National de l'Emploi et de la Formation,https://onef.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_fonction_publique,Fonction publique concours et administration des agents,civil_service,Ministère de la Fonction Publique et de la Modernisation de l'Administration,https://www.fonctionpublique.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+civ_habg,Bonne gouvernance prévention et lutte contre la corruption,anti_corruption,Haute Autorité pour la Bonne Gouvernance,https://www.habg.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+civ_defense,Défense institutions et documentation publique,defense_security,Ministère d'Etat Ministère de la Défense,https://defense.gouv.ci/accueil,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+civ_assnat,Assemblée nationale lois commissions et documentation,governance,Assemblée nationale de Côte d'Ivoire,https://www.assnat.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_senat,Sénat rapports commissions et documentation,governance,Sénat de Côte d'Ivoire,https://www.senat.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_conseil_constitutionnel,Conseil constitutionnel décisions lois et contentieux électoral,law_justice,Conseil Constitutionnel de Côte d'Ivoire,https://conseil-constitutionnel.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_cour_comptes,Cour des comptes rapports finances publiques et audits,public_finance,Cour des Comptes de Côte d'Ivoire,https://courdescomptes.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_cesec,Conseil économique social environnemental et culturel,governance,CESEC,https://lecesec.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+civ_presidence,Présidence institutions discours communiqués et Conseil des ministres,governance,Présidence de la République de Côte d'Ivoire,https://www.presidence.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_diplomacy,Diplomatie coopération internationale et diaspora,diplomacy,Ministère des Affaires Etrangères et de la Coopération Internationale,https://web.diplomatie.gouv.ci/accueil,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+civ_solidarity_poverty,Solidarité cohésion nationale vulnérabilité et lutte contre la pauvreté,poverty,Ministère de la Solidarité et de la Lutte contre la Pauvreté,https://www.solidarite.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_mirah,Ressources animales élevage pêche aquaculture et santé vétérinaire,livestock_fisheries,Ministère des Ressources Animales et Halieutiques,https://www.ressourcesanimales.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
