@@ -1,31 +1,106 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
+import re
 from pathlib import Path
-from typing import Any
-from urllib.parse import quote, urljoin
+from typing import Any, Iterable
+from urllib.parse import quote, unquote, urljoin, urlparse
 
-from .data_gouv_ci import (
-    API,
-    PORTAL,
-    _cached_rows,
-    _classification,
-    _dataset_id,
-    _full_download,
-    _items,
-    _safe_table,
-    _signature,
-)
+from ..metadata import classify_from_base
 from ..snapshots import save_snapshot
 from ..state_io import atomic_write_json
 from ..upstream_state import UpstreamState
 
+PORTAL = "https://data.gouv.ci"
+API = f"{PORTAL}/data-fair/api/v1"
+
+
+def _safe_table(value: str) -> str:
+    value = unquote(value).strip().lower()
+    value = re.sub(r"[^a-z0-9]+", "_", value).strip("_")
+    return ("datagouv_" + value)[:120]
+
+
+def _dataset_id(meta: dict[str, Any]) -> str | None:
+    for key in ("id", "slug", "name"):
+        value = meta.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _items(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [x for x in payload if isinstance(x, dict)]
+    if isinstance(payload, dict):
+        for key in ("results", "data", "items", "datasets", "rows"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [x for x in value if isinstance(x, dict)]
+    return []
+
+
+def _signature(meta: dict[str, Any]) -> str:
+    keys = (
+        "id", "slug", "updatedAt", "updated", "modified", "dataUpdatedAt",
+        "finalizedAt", "size", "fileSize", "count", "lines", "version", "status",
+        "schema", "isRest", "isVirtual",
+    )
+    compact = {key: meta.get(key) for key in keys}
+    return hashlib.sha256(json.dumps(compact, sort_keys=True, default=str, ensure_ascii=False).encode()).hexdigest()
+
 
 def _legacy_signature(meta: dict[str, Any]) -> str:
-    """v0.8.1 Data.gouv signature, used only to adopt existing materialized data."""
-    compact = {k: meta.get(k) for k in ("id", "slug", "updatedAt", "updated", "modified", "size", "count", "version")}
+    compact = {key: meta.get(key) for key in ("id", "slug", "updatedAt", "updated", "modified", "size", "count", "version")}
     return hashlib.sha256(json.dumps(compact, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _decode(data: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            pass
+    return data.decode("utf-8", "replace")
+
+
+def _rows(data: bytes) -> Iterable[dict[str, Any]]:
+    text = _decode(data)
+    try:
+        csv.field_size_limit(max(csv.field_size_limit(), 16 * 1024 * 1024))
+    except OverflowError:
+        pass
+    try:
+        dialect = csv.Sniffer().sniff(text[:65536], delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+    for row in csv.DictReader(io.StringIO(text), dialect=dialect):
+        yield {str(k): v for k, v in row.items() if k is not None}
+
+
+def dataset_id_from_public_url(url: str) -> str | None:
+    path = urlparse(url).path.rstrip("/")
+    marker = "/datasets/"
+    return unquote(path.split(marker, 1)[1]).strip() or None if marker in path else None
+
+
+def _classification(meta: dict[str, Any], dsid: str, metadata_base: dict[str, Any]) -> dict[str, Any]:
+    text = " ".join(str(meta.get(key) or "") for key in ("title", "name", "description", "keywords", "topics", "slug"))
+    classified = classify_from_base(metadata_base, f"{PORTAL}/datasets/{dsid}", text, document_type="DATASET")
+    return {
+        "__ivoiredata_country_code": classified.get("country_code"),
+        "__ivoiredata_country_name": classified.get("country_name"),
+        "__ivoiredata_primary_domain": classified.get("primary_domain"),
+        "__ivoiredata_secondary_domains_json": classified.get("secondary_domains_json"),
+        "__ivoiredata_language": classified.get("language"),
+        "__ivoiredata_document_type": "DATASET",
+        "__ivoiredata_geographic_scope": classified.get("geographic_scope"),
+        "__ivoiredata_classification_status": classified.get("classification_status"),
+        "__ivoiredata_classification_confidence": classified.get("classification_confidence"),
+    }
 
 
 def _request_json(session, url: str, *, params: dict[str, Any] | None = None, timeout: int = 240):
@@ -59,14 +134,22 @@ def _discover_official(session, page_size: int = 1000) -> list[dict[str, Any]]:
     return collected
 
 
+def _full_download(session, dsid: str):
+    url = f"{API}/datasets/{quote(dsid, safe='')}/full"
+    response = session.get(url, timeout=240, headers={"Accept": "text/csv,application/csv,text/plain,*/*;q=0.5"})
+    response.raise_for_status()
+    content_type = response.headers.get("content-type", "").lower()
+    if "text/html" in content_type and response.content.lstrip().startswith(b"<"):
+        raise RuntimeError("/full returned HTML instead of dataset data")
+    parsed = list(_rows(response.content))
+    if not parsed and response.content.strip():
+        raise RuntimeError("/full returned non-empty content that could not be parsed as tabular CSV")
+    return response, parsed
+
+
 def _lines_download_official(session, dsid: str, *, snapshot_dir: Path | None, source_id: str,
                              page_size: int = 10000) -> tuple[list[dict[str, Any]], dict[str, object] | None, str]:
-    """Read all lines by following Data Fair's official `next` cursor URL.
-
-    The per-dataset OpenAPI contract explicitly says page starts at 1 and, for deep
-    pagination, consumers should follow `next` until it disappears. This method never
-    infers offsets from `total`, which may itself be estimated.
-    """
+    """Read all lines by following Data Fair's official `next` cursor URL."""
     base_url = f"{API}/datasets/{quote(dsid, safe='')}/lines"
     next_url: str | None = base_url
     params: dict[str, Any] | None = {"size": min(max(1, int(page_size)), 10000), "page": 1, "count": "exact"}
@@ -80,12 +163,11 @@ def _lines_download_official(session, dsid: str, *, snapshot_dir: Path | None, s
         visited.add(request_key)
         response, payload = _request_json(session, next_url, params=params, timeout=300)
         requests_count += 1
-        batch = _items(payload)
-        rows.extend(batch)
+        rows.extend(_items(payload))
         raw_next = payload.get("next") if isinstance(payload, dict) else None
         if raw_next:
             next_url = urljoin(response.url, str(raw_next))
-            params = None  # the next link already carries the cursor/query contract
+            params = None
         else:
             next_url = None
         if requests_count > 100000:
@@ -101,6 +183,25 @@ def _lines_download_official(session, dsid: str, *, snapshot_dir: Path | None, s
         name=f"{dsid}-lines.json",
     ) if snapshot_dir is not None else None
     return rows, snapshot, base_url
+
+
+def _cached_rows(upstream: UpstreamState, source_id: str, artifact: str, signature: str) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
+    state = upstream.get(source_id, artifact)
+    path = upstream.cached_path(source_id, artifact, signature)
+    if path is None:
+        return None
+    method = str(state.get("method") or "").upper()
+    try:
+        if method == "FULL":
+            rows = list(_rows(path.read_bytes()))
+        elif method == "LINES":
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            rows = _items(payload) if isinstance(payload, dict) else [item for item in payload if isinstance(item, dict)]
+        else:
+            return None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return rows, state
 
 
 def data_gouv_ci_resource_v2(
@@ -126,7 +227,7 @@ def data_gouv_ci_resource_v2(
         loaded_signatures = dlt.current.resource_state().setdefault("dataset_signatures", {})
         upstream = UpstreamState(upstream_state_path) if upstream_state_path else None
         catalog = _discover_official(session)
-        wanted = {str(x) for x in (dataset_ids or []) if x}
+        wanted = {str(value) for value in (dataset_ids or []) if value}
         selected: list[dict[str, Any]] = []
         catalog_ids: set[str] = set()
         classifications: dict[str, dict[str, Any]] = {}
@@ -191,9 +292,6 @@ def data_gouv_ci_resource_v2(
                     upstream.mark_unchanged(source_id, artifact, signature=signature, url=f"{PORTAL}/datasets/{dsid}")
                 continue
 
-            # Preserve the hundreds of v0.8.1 datasets already materialized. If their
-            # exact legacy catalogue signature still matches today, promote the state to
-            # the stronger v0.8.2 signature without transferring the body again.
             if loaded and loaded == _legacy_signature(meta):
                 loaded_signatures[dsid] = signature
                 stats["adopted_v081_signature"] += 1
@@ -264,7 +362,7 @@ def data_gouv_ci_resource_v2(
                         sha256=str(snapshot.get("sha256")) if snapshot else None,
                         size_bytes=int(snapshot.get("size_bytes") or 0) if snapshot else None,
                         method=method, rows=len(rows),
-                        local_path=str(snapshot.get("local_path") or "") or None if snapshot else None,
+                        local_path=(str(snapshot.get("local_path") or "") or None) if snapshot else None,
                     )
 
             if not rows:
@@ -296,3 +394,6 @@ def data_gouv_ci_resource_v2(
         )
 
     return resource()
+
+
+data_gouv_ci_resource = data_gouv_ci_resource_v2
