@@ -24,8 +24,8 @@ def _parse(value: str | None) -> datetime | None:
 class QualificationStore:
     """Persistent CI Gold stability qualification ledger.
 
-    Only automatic scheduler cycles are recorded here. Manual syncs are deliberately
-    excluded so a user can repair/test a source without falsifying the stability window.
+    Only automatic scheduler cycles are recorded. Manual syncs are deliberately
+    excluded so repair/test runs cannot falsify the stability window.
     """
 
     def __init__(self, path: Path):
@@ -55,7 +55,10 @@ class QualificationStore:
             "cycles_total": 0,
             "cycles_with_errors": 0,
             "sync_attempts": 0,
+            "sync_successes": 0,
             "sync_errors": 0,
+            "source_attempts": {},
+            "source_errors": {},
             "last_errors": [],
         }
         self._save()
@@ -69,9 +72,16 @@ class QualificationStore:
             self.start()
         rows = list(results)
         errors = [row.source_id for row in rows if row.status != "success"]
+        source_attempts = self.data.setdefault("source_attempts", {})
+        source_errors = self.data.setdefault("source_errors", {})
+        for row in rows:
+            source_attempts[row.source_id] = int(source_attempts.get(row.source_id, 0)) + 1
+            if row.status != "success":
+                source_errors[row.source_id] = int(source_errors.get(row.source_id, 0)) + 1
         self.data["last_cycle_at"] = _now()
         self.data["cycles_total"] = int(self.data.get("cycles_total", 0)) + 1
         self.data["sync_attempts"] = int(self.data.get("sync_attempts", 0)) + len(rows)
+        self.data["sync_successes"] = int(self.data.get("sync_successes", 0)) + sum(1 for row in rows if row.status == "success")
         self.data["sync_errors"] = int(self.data.get("sync_errors", 0)) + len(errors)
         if errors:
             self.data["cycles_with_errors"] = int(self.data.get("cycles_with_errors", 0)) + 1
@@ -88,7 +98,19 @@ class QualificationStore:
         cycles = int(self.data.get("cycles_total", 0))
         error_cycles = int(self.data.get("cycles_with_errors", 0))
         attempts = int(self.data.get("sync_attempts", 0))
+        successes = int(self.data.get("sync_successes", 0))
         errors = int(self.data.get("sync_errors", 0))
+        source_attempts = {str(k): int(v) for k, v in (self.data.get("source_attempts") or {}).items()}
+        source_errors = {str(k): int(v) for k, v in (self.data.get("source_errors") or {}).items()}
+        qualified = bool(
+            started
+            and elapsed_days >= 14
+            and cycles >= 14
+            and attempts > 0
+            and successes > 0
+            and error_cycles == 0
+            and errors == 0
+        )
         return {
             "started_at": self.data.get("started_at"),
             "last_cycle_at": self.data.get("last_cycle_at"),
@@ -97,9 +119,15 @@ class QualificationStore:
             "cycles_with_errors": error_cycles,
             "successful_cycles": max(0, cycles - error_cycles),
             "sync_attempts": attempts,
+            "sync_successes": successes,
             "sync_errors": errors,
+            "sources_attempted": sorted(source_attempts),
+            "source_attempts": source_attempts,
+            "sources_with_errors": sorted(source_errors),
+            "source_errors": source_errors,
             "last_errors": list(self.data.get("last_errors") or []),
             "qualification_days_required": 14,
             "minimum_cycles_required": 14,
-            "qualified": bool(started and elapsed_days >= 14 and cycles >= 14 and error_cycles == 0 and errors == 0),
+            "requires_real_sync_attempt": True,
+            "qualified": qualified,
         }
