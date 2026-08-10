@@ -19,6 +19,7 @@ from .freshness import FreshnessStore
 from .models import SourceSpec, SyncResult
 from .pipeline import get_source_pipeline
 from .registry import SourceRegistry
+from .runtime_control import RuntimeControl
 from .settings import Settings
 
 
@@ -29,7 +30,12 @@ def _now() -> str:
 class IvoireDataEngine:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings.from_env()
-        self.registry = SourceRegistry.load(self.settings.registry_path, self.settings.runtime_config_path)
+        self.runtime = RuntimeControl(self.settings)
+        self.registry = SourceRegistry.load(
+            self.settings.registry_path,
+            self.settings.runtime_config_path,
+            self.settings.runtime_overrides_path,
+        )
         self.freshness = FreshnessStore(self.settings.state_dir / "freshness.json")
 
     def _resource_for(self, spec: SourceSpec, *, force: bool = False):
@@ -117,6 +123,7 @@ class IvoireDataEngine:
         return [self.sync(s.source_id, force=force) for s in self.registry.list(public_only=public_only, auto_only=auto_only) if force or self.freshness.due(s)]
 
     def coverage(self) -> dict:
+        all_specs = self.registry.all()
         specs = self.registry.list()
         public = [s for s in specs if s.public]
         automatic = [s for s in public if s.auto_sync]
@@ -126,10 +133,14 @@ class IvoireDataEngine:
             by_connector[spec.connector] = by_connector.get(spec.connector, 0) + 1
             by_domain[spec.domain] = by_domain.get(spec.domain, 0) + 1
         return {
-            "sources_total": len(specs),
+            "sources_registry": len(all_specs),
+            "sources_enabled": len(specs),
+            "sources_disabled": sum(1 for s in all_specs if not s.enabled),
             "sources_public_syncable": len(public),
             "sources_auto_sync": len(automatic),
-            "sources_manual_or_controlled": len(specs) - len(public),
+            "automatic_updates_enabled": self.runtime.automatic_enabled,
+            "scheduler_interval_seconds": self.runtime.scheduler_interval_seconds,
+            "sources_manual_or_controlled": len(specs) - len(automatic),
             "auto_by_connector": dict(sorted(by_connector.items())),
             "auto_by_domain": dict(sorted(by_domain.items())),
         }
