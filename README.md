@@ -1,40 +1,84 @@
 # IvoireData 🇨🇮
 
-**v0.7.2 — moteur local de collecte, mise à jour, audit et livraison de données classées par domaine, construit sur dlt OSS**
+**v0.8.0 — moteur local CI Gold de collecte, classification, mise à jour, audit et livraison de données de Côte d’Ivoire**
 
-IvoireData collecte les sources publiques utiles à la Côte d’Ivoire, conserve leur provenance, détecte les mises à jour et livre les données localement **par domaine puis par source**. Les données réelles restent sur la machine : GitHub ne contient que le code, la configuration et la documentation.
+IvoireData collecte les sources publiques utiles à la Côte d’Ivoire, conserve leur provenance et leurs droits, classe les données par domaine, ajoute des métadonnées nationales `country_code=CIV`, détecte les mises à jour et livre les données localement. GitHub contient le code, la configuration et la documentation ; le data lake réel reste sur la machine.
 
-## Frontière de responsabilité
+## CI Gold
 
-```text
-Internet / APIs / sites officiels / PDF / CSV / ZIP / PBF
-                           │
-                           ▼
-                       IvoireData
-                           │
-       collecte / update / provenance / audit / classement
-                           │
-                           ▼
-                  data_lake/domains/
-                           │
-                           ▼
-                pipeline équipe modèle
-                           │
-      nettoyage / filtres / PII / dédup / corpus
-                           │
-                 tokenizer / shards
-                           │
-                           ▼
-                      entraînement
+La v0.8.0 introduit le programme **CI Gold**. L’objectif n’est pas de prétendre posséder « toute information existant en Côte d’Ivoire », mais de rendre **chaque grande famille nationale prioritaire explicitement mesurée** : `COVERED`, `PARTIAL`, `CONTROLLED`, `UNAVAILABLE`, `UNRESOLVED` ou `MISSING`.
+
+Commandes principales :
+
+```bash
+ivoiredata coverage-audit
+ivoiredata quality-audit
+ivoiredata qualification status
+ivoiredata ci-gold
+ivoiredata ci-gold --write
 ```
 
-IvoireData s’arrête au data lake. La chaîne downstream est documentée dans [`docs/DOWNSTREAM_AUTOMATION.md`](docs/DOWNSTREAM_AUTOMATION.md) et son contrat d’entrée dans [`docs/DATA_HANDOFF_CONTRACT.md`](docs/DATA_HANDOFF_CONTRACT.md).
+`ci-gold --write` produit le dossier de preuve local :
+
+```text
+data_lake/reports/ci-gold/
+├── audit.json
+├── coverage.json
+├── quality.json
+├── qualification.json
+├── sources.json
+├── ci-gold-report.json
+└── ci-gold-report.md
+```
+
+CI Gold ne peut être approuvé que lorsque tous les gates sont vrais, notamment : score ≥95, aucun P0 manquant/non résolu, aucun `EMPTY`/`ERROR` actif, droits complets, métadonnées documentaires complètes et **14 jours réels de qualification automatique sans erreur**.
+
+## Métadonnées nationales v3
+
+Le manifest v3 et les documents collectés portent notamment :
+
+```text
+country_code = CIV
+country_name = Côte d'Ivoire
+source_domain
+primary_domain
+secondary_domains
+language
+document_type
+geographic_scope
+provider
+rights_tier
+access_tier
+classification_status
+classification_confidence
+```
+
+Les sources spécialisées restent classées par leur domaine. Pour les sources `multidomain`, IvoireData applique des règles déterministes sur les métadonnées/titres afin de produire un domaine principal et des domaines secondaires sans nécessiter de LLM.
+
+## Sources CI Gold ajoutées
+
+La couverture institutionnelle est renforcée avec :
+
+- Secrétariat Général du Gouvernement — textes officiels / Journal officiel ;
+- DGBF — budget, lois de finances, Budget citoyen ;
+- MESRS — enseignement supérieur et recherche ;
+- CEI — élections, résultats, textes et statistiques ;
+- AGEROUTE — réseau routier et banque de données ;
+- ANARE-CI — régulation et données électriques ;
+- Ministère de la Culture ;
+- Ministère du Tourisme ;
+- Ministère de la Communication ;
+- Ministère des Sports ;
+- portail officiel du Gouvernement.
+
+Ces sources sont configurées dans `configs/ci_gold_sources.json`. Les sources privées, contrôlées, soumises à authentification ou à licence incompatible ne sont jamais contournées.
 
 ## Stockage local
 
 ```text
 data_lake/
 ├── catalog.json
+├── reports/ci-gold/
 └── domains/
     └── <domain>/
         └── <source_id>/
@@ -45,52 +89,13 @@ data_lake/
 
 .ivoiredata/state/
 ├── freshness.json
-└── runtime_overrides.json
+├── runtime_overrides.json
+└── ci_gold_qualification.json
 ```
 
-Les tables normalisées sont en Parquet. PostgreSQL, S3, R2 et MinIO ne sont pas requis.
+## Mise à jour manuelle / automatique
 
-`configs/runtime_sources.json` contient les réglages par défaut du produit. Les changements faits par l’utilisateur (AUTO/MANUAL/DISABLED, intervalle scheduler, interrupteur global) sont persistés séparément dans `.ivoiredata/state/runtime_overrides.json`, partagé entre les conteneurs Docker.
-
-## Un `success` ne signifie plus « données disponibles »
-
-Le manifest v2 sépare quatre dimensions :
-
-- `sync.status` : `SUCCESS` / `ERROR` ;
-- `delivery.status` : `FULL_STRUCTURED`, `DOCUMENTS_ONLY`, `SNAPSHOT_ONLY`, `METADATA_ONLY`, `EMPTY` ;
-- `freshness.status` : `FRESH`, `DUE`, `STALE`, `NEVER_SYNCED` ;
-- `transport.security` : `VERIFIED_TLS`, `DEGRADED_TLS`, `HTTP`.
-
-Exemples de warnings : `EMPTY_AFTER_SUCCESS`, `SYNC_ERROR_WITH_STALE_DATA`, `TLS_VERIFICATION_DISABLED`, `METADATA_ONLY_SOURCE`.
-
-Les lignes Parquet sont comptées via leurs **métadonnées**, sans relire les datasets complets.
-
-## Audit
-
-```bash
-ivoiredata audit
-```
-
-renvoie pour chaque source : statut de sync, niveau réel de livraison, fraîcheur, sécurité transport, nombre de lignes, fichiers raw/tables/documents et warnings.
-
-API équivalente :
-
-```text
-GET /audit
-```
-
-Voir [`docs/AUDIT.md`](docs/AUDIT.md).
-
-## Mises à jour manuelles et automatiques
-
-La synchronisation manuelle reste toujours disponible pour une source active :
-
-```bash
-ivoiredata sync civ_faostat --force
-ivoiredata sync --all-public --force
-```
-
-Le scheduler automatique est contrôlable globalement :
+L’automatisation reste entièrement désactivable :
 
 ```bash
 ivoiredata updates status
@@ -99,7 +104,7 @@ ivoiredata updates enable
 ivoiredata updates interval 1800
 ```
 
-Chaque source possède trois modes :
+Par source :
 
 ```bash
 ivoiredata source status civ_faostat
@@ -110,118 +115,92 @@ ivoiredata source enable civ_faostat
 ivoiredata source refresh civ_faostat 72
 ```
 
-- `AUTOMATIC` : source active et sélectionnable par le scheduler ;
-- `MANUAL` : source active, synchronisation uniquement à la demande ;
-- `DISABLED` : source exclue du scheduler, des full sync et des sync directs.
+Les choix utilisateur sont persistés dans `.ivoiredata/state/runtime_overrides.json` et partagés entre `api`, `scheduler` et `sync-once`.
 
-`updates disable` arrête réellement les synchronisations automatiques sans bloquer les commandes manuelles.
-
-Voir [`docs/DYNAMIC_UPDATES.md`](docs/DYNAMIC_UPDATES.md).
-
-## Connecteurs structurés principaux
-
-- `data_gouv_ci` : catalogue Data.gouv.ci + datasets `/full`, raw + Parquet ;
-- `world_bank_wdi` : World Bank WDI, JSON + Parquet ;
-- `world_bank_projects` : projets World Bank Côte d’Ivoire via API de recherche ;
-- `ilostat_ref_area` : backend CSV ILOSTAT filtré `ref_area=CIV`, sans RDS/pyreadr ;
-- `faostat_country` : ZIP bulk FAOSTAT officiels, snapshots raw, filtrage Côte d’Ivoire, Parquet par domaine FAOSTAT ;
-- `uis_country` : UIS Data API, définitions + séries `geoUnit=CIV`, raw JSON + Parquet ;
-- `geoboundaries` : limites administratives ;
-- `osm_geofabrik` : snapshot PBF Côte d’Ivoire ;
-- `public_web` : sites/PDF institutionnels bornés, même domaine, robots.txt ;
-- `http_file` : CSV/JSON/JSONL/XLS/XLSX/Parquet directs.
-
-FAOSTAT, UIS, ILOSTAT et World Bank Projects ont été validés par synchronisation réelle locale avant la série v0.7.x. Les volumes exacts restent propres au data lake local et doivent être lus via `ivoiredata audit`.
-
-## Installation / mise à jour
+## Démarrage Docker
 
 ```bash
 git pull
-python -m pip install -e '.[dev]'
-
-ivoiredata coverage
-ivoiredata sources --public
-ivoiredata audit
-```
-
-Docker :
-
-```bash
 docker compose build
 docker compose --profile run up -d
 ```
 
-Les dossiers `data_lake/` et `.ivoiredata/` restent montés depuis l’hôte. Les réglages dynamiques survivent donc aux rebuilds Docker.
-
-## Validation ciblée
+Validation :
 
 ```bash
-ivoiredata sync civ_ilostat --force
-ivoiredata sync civ_faostat --force
-ivoiredata sync civ_uis --force
-ivoiredata sync civ_worldbank_projects --force
-ivoiredata audit
+docker compose exec api ivoiredata audit
+docker compose exec api ivoiredata coverage-audit
+docker compose exec api ivoiredata quality-audit
 ```
 
-Pour toutes les sources publiques actives :
+Après passage à v0.8.0, effectuer une synchronisation complète forcée afin de régénérer les manifests v3 et enrichir les anciens Parquet documentaires :
 
 ```bash
-ivoiredata sync --all-public --force
-ivoiredata audit
+docker compose --profile sync run --rm sync-once \
+  sh -c "ivoiredata sync --all-public --force"
 ```
 
-Une source ne doit être déclarée réellement couverte que si `delivery_status != EMPTY` et que son contenu correspond au niveau attendu.
+Puis démarrer la qualification :
+
+```bash
+docker compose exec api ivoiredata qualification start
+```
 
 ## API locale
 
-```bash
-uvicorn ivoiredata.api:app --host 127.0.0.1 --port 8000
-```
-
-Endpoints principaux :
+Endpoints importants :
 
 ```text
 GET  /health
 GET  /sources
 GET  /status
 GET  /coverage
+GET  /coverage-audit
+GET  /quality-audit
 GET  /audit
-GET  /inventory
+GET  /ci-gold
+POST /ci-gold/report
+GET  /qualification
+POST /qualification/start
 GET  /settings/updates
 PUT  /settings/updates
 GET  /sources/{source_id}/settings
 PUT  /sources/{source_id}/settings
 POST /sync/{source_id}
-POST /query/source/{source_id}
 ```
+
+## Frontière de responsabilité
+
+```text
+sources publiques CIV
+        ↓
+IvoireData
+collecte / provenance / classification / audit / fraîcheur
+        ↓
+data_lake CI Gold
+        ↓
+pipeline downstream
+rights validation / nettoyage / PII / dédup / corpus / tokenizer / training
+```
+
+IvoireData ne réalise pas le nettoyage ML avancé, la déduplication du corpus, le tokenizer ni l’entraînement.
 
 ## Documentation
 
-| Document | Rôle |
-|---|---|
-| [`docs/USAGE_GUIDE.md`](docs/USAGE_GUIDE.md) | guide complet : installation, Docker, sync, audit, API, sauvegarde, diagnostic et handoff |
-| [`docs/DYNAMIC_UPDATES.md`](docs/DYNAMIC_UPDATES.md) | modes AUTO/MANUAL/DISABLED, interrupteur global, persistance et API |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | architecture et flux |
-| [`docs/ENGINE.md`](docs/ENGINE.md) | moteur interne |
-| [`docs/CONNECTORS.md`](docs/CONNECTORS.md) | connecteurs |
-| [`docs/SOURCES.md`](docs/SOURCES.md) | familles de sources |
-| [`docs/UPSTREAM_SOURCES.md`](docs/UPSTREAM_SOURCES.md) | références upstream |
-| [`docs/SOURCE_COVERAGE.md`](docs/SOURCE_COVERAGE.md) | couverture et validation live |
-| [`docs/AUDIT.md`](docs/AUDIT.md) | contrat d’audit |
-| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | exploitation quotidienne |
-| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | installation/Docker |
-| [`docs/STORAGE.md`](docs/STORAGE.md) | stockage local |
-| [`docs/DATA_HANDOFF_CONTRACT.md`](docs/DATA_HANDOFF_CONTRACT.md) | handoff équipe modèle |
-| [`docs/DOWNSTREAM_AUTOMATION.md`](docs/DOWNSTREAM_AUTOMATION.md) | nettoyage → corpus → tokenizer → training |
-| [`docs/RIGHTS_AND_ACCESS.md`](docs/RIGHTS_AND_ACCESS.md) | droits et accès |
-| [`docs/ADDING_SOURCE.md`](docs/ADDING_SOURCE.md) | ajout d’une source |
+- [`docs/CI_GOLD.md`](docs/CI_GOLD.md) — spécification et gates CI Gold ;
+- [`docs/CI_COVERAGE_MATRIX.md`](docs/CI_COVERAGE_MATRIX.md) — couverture nationale ;
+- [`docs/USAGE_GUIDE.md`](docs/USAGE_GUIDE.md) — exploitation ;
+- [`docs/AUDIT.md`](docs/AUDIT.md) — audit et manifests ;
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture ;
+- [`docs/DATA_HANDOFF_CONTRACT.md`](docs/DATA_HANDOFF_CONTRACT.md) — contrat downstream ;
+- [`docs/RIGHTS_AND_ACCESS.md`](docs/RIGHTS_AND_ACCESS.md) — droits.
 
 ## Principes
 
-1. GitHub ne contient jamais le data lake réel.
-2. Pas de contournement d’authentification, CAPTCHA, paywall ou contrôle d’accès.
-3. Les microdonnées contrôlées restent exclues de l’ingestion automatique.
-4. Provenance, URL et SHA-256 sont conservés lorsque possible.
-5. Une erreur upstream ne doit pas supprimer la dernière livraison valide.
-6. `success` technique et livraison exploitable sont toujours mesurés séparément.
-7. Les réglages utilisateur dynamiques sont séparés de la configuration versionnée du produit.
+1. Côte d’Ivoire uniquement jusqu’à validation CI Gold.
+2. Aucun contournement d’authentification, CAPTCHA, paywall ou contrôle d’accès.
+3. Une source `SUCCESS` n’est pas automatiquement considérée comme couverte.
+4. Une source `EMPTY`, non résolue ou contrôlée ne doit pas être présentée comme une livraison complète.
+5. Les droits et la provenance restent attachés aux données jusqu’au handoff.
+6. Une erreur upstream ne supprime pas la dernière livraison valide.
+7. Le data lake réel et les réglages locaux ne sont pas stockés dans Git.
