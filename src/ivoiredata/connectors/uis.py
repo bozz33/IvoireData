@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
 from ..snapshots import save_snapshot
+from ..state_io import atomic_write_json
+from ..upstream_state import UpstreamState
 
 API = "https://api.uis.unesco.org/api/public"
 
@@ -21,10 +25,18 @@ def _rows(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _get_json(session, url: str, *, params: list[tuple[str, str]] | dict[str, Any] | None = None, timeout: int = 180):
-    response = session.get(url, params=params, timeout=timeout)
+def _conditional_json(session, url: str, *, source_id: str, artifact: str,
+                      upstream: UpstreamState | None, params: list[tuple[str, str]] | dict[str, Any] | None = None,
+                      timeout: int = 180):
+    headers = {"Accept": "application/json"}
+    if upstream:
+        headers.update(upstream.conditional_headers(source_id, artifact))
+    response = session.get(url, params=params, headers=headers, timeout=timeout)
+    if response.status_code == 304:
+        return response, None, None
     response.raise_for_status()
-    return response, response.json()
+    digest = hashlib.sha256(response.content).hexdigest()
+    return response, response.json(), digest
 
 
 def uis_country_resource(
@@ -32,14 +44,16 @@ def uis_country_resource(
     geo_unit: str = "CIV",
     start_year: int | None = None,
     end_year: int | None = None,
-    user_agent: str = "IvoireData/0.7",
+    user_agent: str = "IvoireData/0.8.2",
     snapshot_dir: Path | None = None,
+    upstream_state_path: Path | None = None,
 ):
-    """Load UNESCO UIS indicator data for one country from the official Data API.
+    """Load UNESCO UIS data incrementally using official API HTTP validators.
 
-    The UIS API accepts an ISO3 `geoUnit` filter and returns up to 100,000 records per
-    request. A Côte d'Ivoire request is comfortably below that limit. Definitions and
-    the country payload are snapshotted for reproducibility.
+    UIS does not expose a source-wide release number in the endpoint contract used by
+    IvoireData. Therefore each official endpoint is checked with ETag/Last-Modified when
+    available. If the server returns 200 without validators, SHA-256 prevents duplicate
+    snapshots/table rewrites even though the response body had to be transferred.
     """
     import dlt
     import requests
@@ -47,50 +61,82 @@ def uis_country_resource(
     @dlt.resource(name="uis_civ", write_disposition="replace")
     def resource():
         session = requests.Session()
-        session.headers.update({"User-Agent": user_agent, "Accept": "application/json"})
+        session.headers.update({"User-Agent": user_agent})
+        upstream = UpstreamState(upstream_state_path) if upstream_state_path else None
+        signatures = dlt.current.resource_state().setdefault("artifact_signatures_v082", {})
+        stats: dict[str, Any] = {
+            "geo_unit": geo_unit,
+            "artifacts_checked": 0,
+            "unchanged": 0,
+            "updated": 0,
+            "data_rows": 0,
+        }
+
+        def handle(artifact: str, url: str, table: str, *, params=None, filter_geo: bool = False, required: bool = False):
+            stats["artifacts_checked"] += 1
+            response, payload, digest = _conditional_json(
+                session, url, source_id="civ_uis", artifact=artifact,
+                upstream=upstream, params=params, timeout=240 if artifact == "data" else 180,
+            )
+            if response.status_code == 304:
+                stats["unchanged"] += 1
+                if upstream:
+                    upstream.mark_http_unchanged("civ_uis", artifact, url=response.url)
+                return []
+            assert digest is not None
+            if signatures.get(artifact) == digest:
+                stats["unchanged"] += 1
+                if upstream:
+                    upstream.mark_unchanged(
+                        "civ_uis", artifact, signature=digest, url=response.url,
+                        etag=response.headers.get("etag"), last_modified=response.headers.get("last-modified"),
+                        reason="SHA256",
+                    )
+                return []
+            snapshot = save_snapshot(
+                snapshot_dir,
+                source_id="civ_uis",
+                url=response.url,
+                content=response.content,
+                content_type=response.headers.get("content-type"),
+                name=f"uis-{artifact}.json",
+            )
+            rows = _rows(payload)
+            if required and not rows:
+                raise RuntimeError(f"UIS API returned no rows for {artifact} geoUnit={geo_unit}")
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                if filter_geo:
+                    code = str(row.get("geoUnitCode") or row.get("code") or row.get("id") or row.get("iso3") or "")
+                    if code and code.upper() != geo_unit.upper():
+                        continue
+                item = dict(row)
+                item["__ivoiredata_source_url"] = response.url
+                item["__ivoiredata_raw_sha256"] = snapshot["sha256"]
+                item["__ivoiredata_raw_path"] = snapshot.get("local_path")
+                if artifact == "data":
+                    item["__ivoiredata_geo_unit"] = geo_unit
+                out.append(item)
+            signatures[artifact] = digest
+            stats["updated"] += 1
+            if artifact == "data":
+                stats["data_rows"] = len(out)
+            if upstream:
+                upstream.mark_downloaded(
+                    "civ_uis", artifact, url=response.url, signature=digest,
+                    sha256=digest, size_bytes=len(response.content),
+                    etag=response.headers.get("etag"), last_modified=response.headers.get("last-modified"),
+                    method="HTTP_VALIDATORS", rows=len(out), local_path=str(snapshot.get("local_path") or "") or None,
+                )
+            return [(table, item) for item in out]
 
         definitions_url = f"{API}/definitions/indicators"
-        response, payload = _get_json(session, definitions_url)
-        definition_snapshot = save_snapshot(
-            snapshot_dir,
-            source_id="civ_uis",
-            url=response.url,
-            content=response.content,
-            content_type=response.headers.get("content-type"),
-            name="uis-indicator-definitions.json",
-        )
-        for row in _rows(payload):
-            item = dict(row)
-            item["__ivoiredata_source_url"] = response.url
-            item["__ivoiredata_raw_sha256"] = definition_snapshot["sha256"]
-            item["__ivoiredata_raw_path"] = definition_snapshot.get("local_path")
-            yield dlt.mark.with_table_name(item, "uis_indicators")
+        for table, item in handle("indicator_definitions", definitions_url, "uis_indicators"):
+            yield dlt.mark.with_table_name(item, table)
 
         geounits_url = f"{API}/definitions/geounits"
-        response, payload = _get_json(session, geounits_url)
-        geounit_snapshot = save_snapshot(
-            snapshot_dir,
-            source_id="civ_uis",
-            url=response.url,
-            content=response.content,
-            content_type=response.headers.get("content-type"),
-            name="uis-geounits.json",
-        )
-        for row in _rows(payload):
-            code = str(
-                row.get("geoUnitCode")
-                or row.get("code")
-                or row.get("id")
-                or row.get("iso3")
-                or ""
-            )
-            if code and code.upper() != geo_unit.upper():
-                continue
-            item = dict(row)
-            item["__ivoiredata_source_url"] = response.url
-            item["__ivoiredata_raw_sha256"] = geounit_snapshot["sha256"]
-            item["__ivoiredata_raw_path"] = geounit_snapshot.get("local_path")
-            yield dlt.mark.with_table_name(item, "uis_geounits")
+        for table, item in handle("geounits", geounits_url, "uis_geounits", filter_geo=True):
+            yield dlt.mark.with_table_name(item, table)
 
         params: list[tuple[str, str]] = [("geoUnit", geo_unit)]
         if start_year is not None:
@@ -98,24 +144,11 @@ def uis_country_resource(
         if end_year is not None:
             params.append(("endYear", str(int(end_year))))
         data_url = f"{API}/data/indicators"
-        response, payload = _get_json(session, data_url, params=params, timeout=240)
-        data_snapshot = save_snapshot(
-            snapshot_dir,
-            source_id="civ_uis",
-            url=response.url,
-            content=response.content,
-            content_type=response.headers.get("content-type"),
-            name=f"uis-{geo_unit}-indicators.json",
-        )
-        rows = _rows(payload)
-        if not rows:
-            raise RuntimeError(f"UIS API returned no indicator rows for geoUnit={geo_unit}")
-        for row in rows:
-            item = dict(row)
-            item["__ivoiredata_geo_unit"] = geo_unit
-            item["__ivoiredata_source_url"] = response.url
-            item["__ivoiredata_raw_sha256"] = data_snapshot["sha256"]
-            item["__ivoiredata_raw_path"] = data_snapshot.get("local_path")
-            yield dlt.mark.with_table_name(item, "uis_data")
+        for table, item in handle("data", data_url, "uis_data", params=params, required=True):
+            yield dlt.mark.with_table_name(item, table)
+
+        if snapshot_dir:
+            atomic_write_json(snapshot_dir / "uis_sync_stats.json", stats)
+        yield dlt.mark.with_table_name({"run_stats_json": json.dumps(stats, ensure_ascii=False), **stats}, "uis_sync_stats")
 
     return resource()
