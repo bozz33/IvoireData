@@ -1,12 +1,10 @@
-# Guide d’utilisation IvoireData v0.8.0
+# Guide d’utilisation IvoireData v0.8.1
 
-Ce guide couvre l’installation, la collecte manuelle/automatique, les contrôles dynamiques, les audits CI Gold, la qualification de stabilité, la sauvegarde et le handoff downstream.
+Ce guide couvre installation, collecte manuelle/automatique, contrôles dynamiques, audits CI Gold, découvertes Data.gouv, PDF `NEEDS_OCR`, qualification, sauvegarde et handoff downstream.
 
 > IvoireData reste le moteur de collecte/livraison. Nettoyage ML avancé, PII, déduplication, corpus, tokenizer et entraînement restent downstream.
 
-## 1. Installation
-
-Prérequis recommandés : Git, Docker Engine/Desktop, Docker Compose v2, accès Internet et espace disque local.
+## 1. Installation / mise à jour
 
 ```bash
 git clone https://github.com/bozz33/IvoireData.git
@@ -24,7 +22,7 @@ docker compose build
 docker compose --profile run up -d
 ```
 
-Ne jamais supprimer `data_lake/` ou `.ivoiredata/` lors d’une mise à jour.
+Ne jamais supprimer `data_lake/` ou `.ivoiredata/` pour une mise à jour de code.
 
 ## 2. Stockage
 
@@ -44,10 +42,15 @@ data_lake/
 └── ci_gold_qualification.json
 ```
 
-- `configs/runtime_sources.json` : configuration historique/par défaut ;
-- `configs/ci_gold_sources.json` : overlay versionné CI Gold ;
-- `.ivoiredata/state/runtime_overrides.json` : choix utilisateur persistants ;
-- `configs/ci_coverage.json` : matrice nationale de couverture.
+Registres/config :
+
+```text
+registry/sources.csv
+registry/ci_gold_completeness.csv
+configs/runtime_sources.json
+configs/ci_gold_sources.json
+configs/ci_coverage.json
+```
 
 ## 3. Diagnostic de base
 
@@ -58,30 +61,25 @@ ivoiredata coverage
 ivoiredata audit
 ivoiredata coverage-audit
 ivoiredata quality-audit
+ivoiredata discoveries
 ivoiredata updates status
 ivoiredata qualification status
 ivoiredata ci-gold
 ```
 
-Avec Docker :
+Docker :
 
 ```bash
 docker compose exec api ivoiredata audit
 docker compose exec api ivoiredata coverage-audit
 docker compose exec api ivoiredata quality-audit
+docker compose exec api ivoiredata discoveries
 ```
 
 ## 4. Synchronisation manuelle
 
-Une source :
-
 ```bash
 ivoiredata sync civ_faostat --force
-```
-
-Toutes les sources publiques actives :
-
-```bash
 ivoiredata sync --all-public --force
 ```
 
@@ -92,7 +90,7 @@ docker compose --profile sync run --rm sync-once \
   sh -c "ivoiredata sync --all-public --force"
 ```
 
-La synchronisation manuelle reste possible même si l’automatisation globale est coupée.
+Le manuel reste disponible même avec l’automatique global désactivé.
 
 ## 5. Mise à jour automatique
 
@@ -114,26 +112,17 @@ ivoiredata source enable civ_faostat
 ivoiredata source refresh civ_faostat 72
 ```
 
-Sémantique :
-
 ```text
-enabled=false                   -> DISABLED
-enabled=true, auto_sync=false   -> MANUAL
-enabled=true, auto_sync=true    -> AUTOMATIC
+enabled=false                  -> DISABLED
+enabled=true auto_sync=false   -> MANUAL
+enabled=true auto_sync=true    -> AUTOMATIC
 ```
 
-Les overrides sont persistés dans `.ivoiredata/state/runtime_overrides.json` et partagés entre les conteneurs.
+Les overrides persistent dans `.ivoiredata/state/runtime_overrides.json`.
 
-## 6. Manifest v3
+## 6. Manifest v3 et métadonnées CIV
 
-Chaque source reçoit un manifest avec quatre dimensions opérationnelles :
-
-- `sync.status` ;
-- `delivery.status` ;
-- `freshness.status` ;
-- `transport.security`.
-
-Et une section nationale `metadata` contenant notamment :
+Le manifest sépare sync, delivery, fraîcheur et transport, puis ajoute :
 
 ```text
 country_code=CIV
@@ -153,108 +142,143 @@ classification_confidence
 
 ## 7. Delivery status
 
-- `FULL_STRUCTURED` : vraies données métier structurées ;
-- `DOCUMENTS_ONLY` : pages/PDF/chunks textuels ;
-- `SNAPSHOT_ONLY` : payload brut/binaire, ex. OSM PBF ;
-- `METADATA_ONLY` : limitation volontaire ;
-- `EMPTY` : aucune livraison exploitable.
+```text
+FULL_STRUCTURED
+DOCUMENTS_ONLY
+SNAPSHOT_ONLY
+METADATA_ONLY
+EMPTY
+```
 
-`SUCCESS` ne suffit jamais à déclarer une source couverte.
+`SUCCESS` technique ne signifie jamais automatiquement `COVERED`.
 
-## 8. Classification des documents
+## 8. Classification et sources multidomaines
 
-Les documents `public_web` reçoivent directement les métadonnées CI Gold dans le Parquet. Pour une source à domaine unique, le domaine de la source est canonique. Pour une source multidomaine, les titres/métadonnées sont classifiés avec des règles déterministes conservatrices.
+Les sources spécialisées utilisent leur domaine canonique. Data.gouv.ci/WDI et contenus multidomaines reçoivent une classification déterministe à partir de métadonnées, titre et URL.
 
-Data.gouv.ci et World Bank WDI reçoivent aussi des champs `__ivoiredata_*` au niveau dataset/indicateur.
+Les données restent stockées une seule fois ; les métadonnées permettent le reclassement logique sans duplication physique.
 
-## 9. Audit normal
+## 9. Découvertes Data.gouv
+
+```bash
+ivoiredata discoveries
+ivoiredata discoveries --limit 200
+```
+
+La commande compare le catalogue Data.gouv.ci local aux mappings explicites du registre et retourne `MAPPED`/`UNMAPPED`.
+
+Important :
+
+```text
+discover -> review domain/rights -> register/configure -> sync
+```
+
+IvoireData ne synchronise jamais automatiquement une nouvelle découverte non revue.
+
+## 10. PDF scannés / NEEDS_OCR
+
+Un PDF avec trop peu de texte extractible est conservé mais marqué :
+
+```text
+extraction_status=NEEDS_OCR
+```
+
+Un sidecar est écrit :
+
+```text
+<snapshot>.needs_ocr.json
+```
+
+L’OCR automatique est volontairement désactivée. Le traitement OCR peut être effectué ultérieurement uniquement sur les documents prioritaires.
+
+## 11. Audit normal
 
 ```bash
 ivoiredata audit
 ```
 
-Le résumé distingue maintenant :
+Résumé :
 
 ```text
 rows.structured
 rows.documents
 rows.total_parquet
-transport.VERIFIED_TLS
-transport.DEGRADED_TLS
+transport.*
 ```
 
-## 10. Audit de couverture nationale
+## 12. Coverage audit
 
 ```bash
 ivoiredata coverage-audit
 ```
 
-La matrice est `configs/ci_coverage.json`.
+Matrice v2 : plus de 50 familles nationales. Statuts :
 
-Statuts : `COVERED`, `PARTIAL`, `CONTROLLED`, `UNAVAILABLE`, `UNRESOLVED`, `MISSING`.
+```text
+COVERED PARTIAL CONTROLLED UNAVAILABLE UNRESOLVED MISSING
+```
 
-Un P0 `MISSING`/`UNRESOLVED` bloque CI Gold.
+Un P0 `MISSING/UNRESOLVED` bloque CI Gold.
 
-## 11. Audit qualité
+## 13. Quality audit
 
 ```bash
 ivoiredata quality-audit
 ```
 
-Il vérifie notamment :
+Contrôles principaux :
 
-- manifest ;
-- métadonnées nationales ;
-- droits ;
-- `EMPTY`/`ERROR` P0 ;
-- colonnes documentaires CI Gold.
+- manifest absent ;
+- manifest schema <3 ;
+- métadonnées CIV incomplètes ;
+- droits absents ;
+- `EMPTY`/`ERROR` ;
+- colonnes documentaires manquantes ;
+- fichiers zéro octet ;
+- documents `NEEDS_OCR`.
 
-Après migration depuis v0.7.x, un full sync forcé est requis afin de régénérer les manifests v3 et les Parquet documentaires enrichis.
+`NEEDS_OCR` est un warning de traitement, pas une autorisation à OCRer automatiquement.
 
-## 12. Qualification 14 jours
+## 14. Qualification réelle
 
-Démarrer après un full sync propre :
+Après full sync propre :
 
 ```bash
 ivoiredata qualification start
 ```
 
-Consulter :
+État :
 
 ```bash
 ivoiredata qualification status
 ```
 
-Le scheduler enregistre automatiquement les cycles. Les sync manuels ne comptent pas.
-
-Qualification réussie seulement avec :
+Pour réussir :
 
 - >=14 jours réels ;
 - >=14 cycles scheduler ;
-- 0 cycle automatique avec erreur ;
-- 0 sync automatique en erreur.
+- au moins une vraie sync automatique ;
+- toutes les sources automatiques actives exercées ;
+- zéro erreur automatique.
 
-## 13. CI Gold
+Les sync manuels ne comptent pas.
+
+## 15. CI Gold
 
 ```bash
 ivoiredata ci-gold
-```
-
-Le score combine couverture, qualité/provenance, classification, fraîcheur, stabilité, droits et handoff.
-
-Pour écrire le dossier de preuve :
-
-```bash
 ivoiredata ci-gold --write
 ```
 
-Sortie : `data_lake/reports/ci-gold/`.
+Le second écrit :
 
-CI Gold final exige `approved=true`, pas seulement un score élevé.
+```text
+data_lake/reports/ci-gold/
+```
 
-## 14. API
+CI Gold final exige `approved=true` et tous les gates vrais.
 
-Endpoints principaux :
+## 16. API
 
 ```text
 GET  /health
@@ -263,30 +287,29 @@ GET  /status
 GET  /coverage
 GET  /coverage-audit
 GET  /quality-audit
+GET  /discoveries
 GET  /audit
 GET  /ci-gold
 POST /ci-gold/report
 GET  /qualification
 POST /qualification/start
-GET  /settings/updates
-PUT  /settings/updates
-GET  /sources/{source_id}/settings
-PUT  /sources/{source_id}/settings
+GET/PUT /settings/updates
+GET/PUT /sources/{source_id}/settings
 POST /sync/{source_id}
-GET  /search/documents
+GET /search/documents
 POST /query/source/{source_id}
 ```
 
-## 15. Interroger les Parquet
+## 17. Requête locale
 
 ```bash
 ivoiredata query civ_worldbank_wdi \
   "SELECT * FROM worldbank_wdi LIMIT 20"
 ```
 
-Les Parquet peuvent aussi être lus avec DuckDB, pandas et PyArrow.
+Query/search utilisent la même configuration effective (overlays CI Gold + overrides persistants) que le moteur.
 
-## 16. Sauvegarde
+## 18. Sauvegarde
 
 Sauvegarder sur un second disque :
 
@@ -295,43 +318,27 @@ data_lake/
 .ivoiredata/
 ```
 
-Le second dossier contient les checkpoints, overrides et la qualification CI Gold.
-
-## 17. Incident upstream
-
-Ordre conseillé :
+## 19. Incident upstream
 
 1. `ivoiredata audit` ;
 2. `ivoiredata quality-audit` ;
-3. inspecter `manifest.json` ;
-4. lire les logs Docker ;
-5. vérifier l’upstream ;
-6. corriger le connecteur si nécessaire ;
-7. ajouter un test ;
-8. resynchroniser uniquement la source.
+3. manifest ;
+4. logs Docker ;
+5. upstream ;
+6. corriger + test ;
+7. resync uniquement la source.
 
-Une erreur upstream ne doit pas supprimer la dernière livraison valide.
+Ne pas supprimer l’ancienne livraison valide lors d’une panne upstream.
 
-## 18. Droits
+## 20. Droits
 
-Les tiers A/B/C/D restent la politique de référence. Ne jamais contourner authentification, CAPTCHA, paywall, consentement ou restriction de licence pour améliorer artificiellement la couverture.
+Les tiers A/B/C/D restent la référence. Aucun contournement d’authentification, CAPTCHA, paywall, consentement ou restriction de licence.
 
-## 19. Handoff downstream
+## 21. Handoff downstream
 
-Le downstream consomme :
+Le downstream consomme catalog, manifests, tables, documents, raw et rapports CI Gold, puis réalise : droits → nettoyage → PII → qualité → dédup → corpus → tokenizer → shards → entraînement.
 
-```text
-data_lake/catalog.json
-data_lake/domains/**/manifest.json
-data_lake/domains/**/tables/*.parquet
-data_lake/domains/**/documents/*
-data_lake/domains/**/raw/*
-data_lake/reports/ci-gold/*
-```
-
-Puis : droits → nettoyage → PII → qualité → dédup → corpus → tokenizer → packing/sharding → entraînement.
-
-## 20. Migration v0.7.2 → v0.8.0
+## 22. Migration vers v0.8.1
 
 ```bash
 git pull
@@ -344,12 +351,13 @@ docker compose --profile sync run --rm sync-once \
 docker compose exec api ivoiredata audit
 docker compose exec api ivoiredata coverage-audit
 docker compose exec api ivoiredata quality-audit
+docker compose exec api ivoiredata discoveries
 ```
 
-Lorsque ces contrôles sont propres :
+Quand les audits sont propres :
 
 ```bash
 docker compose exec api ivoiredata qualification start
 ```
 
-Ne pas annoncer CI Gold final avant la fin réelle de la fenêtre de qualification.
+Ne pas annoncer CI Gold final avant la vraie fin de qualification.
