@@ -20,7 +20,7 @@ civ_datagouv_food_prices_2022,Prix hebdomadaires produits vivriers,economy,data.
 civ_datagouv_fish_meat_trade,Poissons et viande production/import/export,agriculture,data.gouv.ci,https://data.gouv.ci/datasets/chiffres-sur-la-production-les-importations-et-exportations-de-poissons-et-de-viande,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_petroleum,Produits pétroliers et gaziers,extractives_energy,data.gouv.ci,https://data.gouv.ci/datasets/production-et-consommation-de-produits-petroliers-et-gaziers,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_crude_2017,Pétroles bruts traités SIR 2017,extractives_energy,data.gouv.ci,https://data.gouv.ci/datasets/caracteristiques-des-petroles-bruts-traites-par-la-sir-en-2017-12,A_REDISTRIBUTABLE,OPEN,P0
-civ_datagouv_tv_authorized,Télévisions et bouquets autorisés,media_communication,data.gouv.ci,https://data.gouv.ci/datasets/repertoire-des-chaines-de-television-et-bouquets-autorises-de-cote-d%27ivoire,A_REDISTRIBUTABLE,OPEN,P0
+civ_datagouv_tv_authorized,Télévisions et bouquets autorisés,media_communication,data.gouv.ci,https://data.gouv.ci/datasets/repertoire-des-chaines-de-television-et-bouquets-autorises-de-cote-divoire,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_livestock_2024,Flux de cheptel 2024,agriculture,data.gouv.ci,https://data.gouv.ci/datasets/repartition-des-flux-entrants-et-sortants-de-cheptel-par-espece-en-percent,A_REDISTRIBUTABLE,OPEN,P0
 civ_datagouv_milk_2024,Production de lait 2024,agriculture,data.gouv.ci,https://data.gouv.ci/datasets/production-totale-et-moyenne-de-lait-par-region-selon-lespece-en-litres-en-2024,A_REDISTRIBUTABLE,OPEN,P0
 civ_anstat_nada,ANStat NADA,multidomain,ANStat,https://nada.anstat.ci/index.php/catalog,C_DATASET_SPECIFIC,MIXED,P0
@@ -62,3 +62,14 @@ civ_onep,ONEP eau potable,water_sanitation,ONEP/DGPE,https://dgpe.gouv.ci/fr/ent
 civ_onad,ONAD assainissement,water_sanitation,ONAD,https://onad.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
 civ_sodexam,SODEXAM météo et stations,environment_climate,SODEXAM,https://sodexam.com/meteorologie/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
 civ_fao_ag_census,Recensement agriculture 2015-2016,agriculture,FAO/Gouvernement CIV,https://microdata.fao.org/index.php/catalog/1609,D_RESEARCH_OR_DATASET_TERMS,OPEN_METADATA_DOWNLOAD_CONTROLLED,P0
+civ_sgg_official_texts,SGG textes officiels et Journal officiel,law_justice,Secrétariat Général du Gouvernement,https://web.sgg.gouv.ci/accueil,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_dgbf_budget,Budget de l’État et lois de finances,public_finance,Direction Générale du Budget et des Finances,https://www.budget.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_mesrs,Enseignement supérieur et recherche,higher_education,Ministère de l’Enseignement Supérieur et de la Recherche Scientifique,https://www.enseignement.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_cei,Elections résultats statistiques et textes,elections,Commission Électorale Indépendante,https://www.cei.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_ageroute,Banque de données et réseau routier,roads,AGEROUTE,https://ageroute.ci/gestion-du-reseau/reseau-routier/banque-de-donnees,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_anare,Régulation et données du secteur électrique,electricity,ANARE-CI,https://anare.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_culture,Culture patrimoine arts et statistiques,culture,Ministère de la Culture et de la Francophonie,https://culture.gouv.ci/accueil,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0
+civ_tourism,Tourisme et loisirs,tourism_culture,Ministère du Tourisme et des Loisirs,https://web.tourisme.gouv.ci/accueil,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+civ_communication,Communication médias textes et statistiques,media_communication,Ministère de la Communication,https://www.communication.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+civ_sports,Sports et sport scolaire,sports,Ministère des Sports et du Cadre de Vie,https://sport.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+civ_gouv_portal,Portail officiel du Gouvernement,governance,Gouvernement de Côte d’Ivoire,https://www.gouv.ci/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P0

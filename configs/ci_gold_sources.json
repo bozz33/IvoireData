@@ -1,0 +1,147 @@
+{
+  "sources": {
+    "civ_sgg_official_texts": {
+      "connector": "public_web",
+      "refresh_hours": 72,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 80,
+        "primary_domain": "law_justice",
+        "secondary_domains": ["governance", "history"],
+        "language": "fr",
+        "geographic_scope": "NATIONAL"
+      }
+    },
+    "civ_dgbf_budget": {
+      "connector": "public_web",
+      "refresh_hours": 72,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 70,
+        "primary_domain": "public_finance",
+        "secondary_domains": ["economy", "governance"],
+        "language": "fr",
+        "geographic_scope": "NATIONAL"
+      }
+    },
+    "civ_mesrs": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 60,
+        "primary_domain": "higher_education",
+        "secondary_domains": ["research", "education"],
+        "language": "fr",
+        "geographic_scope": "NATIONAL"
+      }
+    },
+    "civ_cei": {
+      "connector": "public_web",
+      "refresh_hours": 24,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 100,
+        "primary_domain": "elections",
+        "secondary_domains": ["governance", "law_justice"],
+        "language": "fr",
+        "geographic_scope": "NATIONAL"
+      }
+    },
+    "civ_ageroute": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 60,
+        "primary_domain": "roads",
+        "secondary_domains": ["transport", "geography"],
+        "language": "fr",
+        "geographic_scope": "NATIONAL"
+      }
+    },
+    "civ_anare": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 60,
+        "primary_domain": "electricity",
+        "secondary_domains": ["extractives_energy", "economy"],
+        "language": "fr",
+        "geographic_scope": "NATIONAL"
+      }
+    },
+    "civ_culture": {
+      "connector": "public_web",
+      "refresh_hours": 72,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 100,
+        "primary_domain": "culture",
+        "secondary_domains": ["history", "tourism_culture"],
+        "language": "fr",
+        "geographic_scope": "NATIONAL"
+      }
+    },
+    "civ_tourism": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 60,
+        "primary_domain": "tourism_culture",
+        "secondary_domains": ["culture", "economy"],
+        "language": "fr",
+        "geographic_scope": "NATIONAL"
+      }
+    },
+    "civ_communication": {
+      "connector": "public_web",
+      "refresh_hours": 72,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 70,
+        "primary_domain": "media_communication",
+        "secondary_domains": ["governance", "law_justice"],
+        "language": "fr",
+        "geographic_scope": "NATIONAL"
+      }
+    },
+    "civ_sports": {
+      "connector": "public_web",
+      "refresh_hours": 168,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 40,
+        "primary_domain": "sports",
+        "secondary_domains": ["education"],
+        "language": "fr",
+        "geographic_scope": "NATIONAL"
+      }
+    },
+    "civ_gouv_portal": {
+      "connector": "public_web",
+      "refresh_hours": 24,
+      "auto_sync": true,
+      "options": {
+        "crawl": true,
+        "max_pages": 80,
+        "primary_domain": "governance",
+        "secondary_domains": ["administration", "history"],
+        "language": "fr",
+        "geographic_scope": "NATIONAL"
+      }
+    }
+  }
+}

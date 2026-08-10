@@ -9,6 +9,7 @@ from urllib.parse import urldefrag, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 from ..cleaning import clean_text
+from ..metadata import classify_from_base, title_from_text
 from ..snapshots import save_snapshot
 
 _SKIP_EXTENSIONS = {
@@ -113,7 +114,7 @@ def public_document_resource(
     *,
     source_id: str,
     url: str,
-    user_agent: str = "IvoireData/0.6",
+    user_agent: str = "IvoireData/0.8",
     force: bool = False,
     crawl: bool = False,
     max_pages: int = 1,
@@ -121,6 +122,7 @@ def public_document_resource(
     metadata_only: bool = False,
     snapshot_dir: Path | None = None,
     verify_ssl: bool = True,
+    metadata_base: dict | None = None,
 ):
     import dlt
     import requests
@@ -128,14 +130,13 @@ def public_document_resource(
 
     max_pages = max(1, min(int(max_pages), 500))
     max_bytes = max(100_000, int(max_bytes))
+    base = dict(metadata_base or {})
 
     @dlt.resource(name="public_documents", write_disposition="merge", primary_key="chunk_id")
     def resource():
         state = dlt.current.resource_state().setdefault("content_hashes", {})
         session = requests.Session()
         if not verify_ssl:
-            # Certificat gouvernemental invalide (hostname mismatch) : on collecte malgré tout
-            # les données publiques, mais on le signale pour traçabilité.
             session.verify = False
             try:
                 import urllib3
@@ -163,9 +164,6 @@ def public_document_resource(
                 response = session.get(current, timeout=120, headers={"User-Agent": user_agent})
                 response.raise_for_status()
             except requests.exceptions.RequestException as exc:
-                # Un lien crawlé peut être mort (404), redirigé hors-hôte, ou lever une erreur SSL
-                # côté serveur. On ne doit pas faire tomber toute la source : on journalise et on
-                # passe au lien suivant. Seule la page racine (url initiale) est critique.
                 if current == url:
                     raise
                 print(f"[public_web] {source_id}: lien ignoré {current} -> {exc}", flush=True)
@@ -200,17 +198,21 @@ def public_document_resource(
                     content=raw,
                     content_type=ctype or None,
                 )
+                classified = classify_from_base(base, current, text)
+                document_title = title_from_text(text)
                 for idx, chunk in enumerate(chunk_text(text)):
                     chunk_id = hashlib.sha256(f"{source_id}|{current}|{digest}|{idx}".encode()).hexdigest()
                     yield {
                         "chunk_id": chunk_id,
                         "source_id": source_id,
                         "source_url": current,
+                        "document_title": document_title,
                         "content_sha256": digest,
                         "local_snapshot": snapshot.get("local_path"),
                         "chunk_index": idx,
                         "metadata_only": metadata_only,
                         "text": chunk,
+                        **classified,
                     }
                 state[current] = digest
             for candidate in links:

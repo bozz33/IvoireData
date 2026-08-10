@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .metadata import source_metadata
 from .models import SourceSpec
 from .settings import Settings
 
@@ -80,16 +81,11 @@ def _parquet_stats(path: Path) -> dict[str, int]:
 def _transport_security(spec: SourceSpec) -> str:
     if spec.source_url.lower().startswith("http://"):
         return "HTTP"
-    # Tout connecteur dont les options désactivent la vérification TLS, pas seulement public_web.
     if spec.options.get("verify_ssl") is False:
         return "DEGRADED_TLS"
     return "VERIFIED_TLS"
 
 
-# Connecteurs qui produisent des données métier structurées (tables CSV/JSON/API -> Parquet).
-# Un connecteur absent de cette liste sera classé selon ses fichiers (documents/raw/empty),
-# même s'il produit des lignes Parquet (ex. public_web produit des chunks textuels, pas
-# des données structurées ; osm_geofabrik produit un snapshot binaire).
 _STRUCTURED_CONNECTORS = frozenset({
     "data_gouv_ci",
     "world_bank_wdi",
@@ -121,12 +117,8 @@ def compute_delivery_status(
         if delivery != "EMPTY":
             warnings.append("METADATA_ONLY_SOURCE")
     elif spec.connector == "osm_geofabrik":
-        # OSM/Geofabrik produit un snapshot binaire (PBF), pas des tables structurées.
         delivery = "SNAPSHOT_ONLY" if raw["files"] > 0 else "EMPTY"
     elif spec.connector == "public_web":
-        # public_web produit des chunks de texte web dans des tables Parquet : ce sont
-        # des DOCUMENTS, pas des données structurées. Une ligne de metadata (OSM) ne
-        # compte pas non plus comme FULL_STRUCTURED.
         if rows > 0 or documents["files"] > 0 or raw["files"] > 0:
             delivery = "DOCUMENTS_ONLY"
         else:
@@ -138,7 +130,6 @@ def compute_delivery_status(
     elif raw["files"] > 0:
         delivery = "SNAPSHOT_ONLY"
     elif rows > 0:
-        # Cas rare : connecteur inconnu qui produit quand même des lignes (futur-proof).
         delivery = "FULL_STRUCTURED"
     else:
         delivery = "EMPTY"
@@ -184,12 +175,15 @@ def write_source_manifest(
     freshness_status = _freshness_status(status, freshness_state, due=due)
     transport_security = _transport_security(spec)
     state = freshness_state or {}
+    meta = source_metadata(spec)
 
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "source_id": spec.source_id,
         "title": spec.title,
         "domain": spec.domain,
+        "country_code": meta["country_code"],
+        "country_name": meta["country_name"],
         "provider": spec.provider,
         "source_url": spec.source_url,
         "rights_tier": spec.rights_tier,
@@ -205,6 +199,7 @@ def write_source_manifest(
         "started_at": started_at,
         "finished_at": finished_at,
         "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "metadata": meta,
         "sync": {
             "status": status.upper(),
             "started_at": started_at,
@@ -260,10 +255,13 @@ def rebuild_catalog(settings: Settings, specs: list[SourceSpec]) -> dict[str, An
             except (OSError, json.JSONDecodeError):
                 item = {"source_id": spec.source_id, "domain": spec.domain, "status": "manifest_error"}
         else:
+            meta = source_metadata(spec)
             item = {
                 "source_id": spec.source_id,
                 "title": spec.title,
                 "domain": spec.domain,
+                "country_code": meta["country_code"],
+                "country_name": meta["country_name"],
                 "provider": spec.provider,
                 "source_url": spec.source_url,
                 "status": "not_synced",
@@ -271,15 +269,19 @@ def rebuild_catalog(settings: Settings, specs: list[SourceSpec]) -> dict[str, An
                 "freshness_status": "NEVER_SYNCED",
                 "auto_sync": spec.auto_sync,
                 "refresh_hours": spec.refresh_hours,
+                "metadata": meta,
             }
         sources.append(item)
         domains.setdefault(spec.domain, []).append(item)
     catalog = {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "storage": "local",
+        "country_code": "CIV",
+        "country_name": "Côte d'Ivoire",
         "root": str(settings.data_dir),
         "domains": {name: rows for name, rows in sorted(domains.items())},
+        "domain_index": {name: [row.get("source_id") for row in rows] for name, rows in sorted(domains.items())},
         "sources": sources,
     }
     (settings.data_dir / "catalog.json").write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")

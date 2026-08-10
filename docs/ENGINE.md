@@ -1,132 +1,185 @@
-# IvoireData Engine v0.7.0
+# Moteur IvoireData v0.8.0
 
-IvoireData utilise **dlt OSS** pour Extract/Normalize/Load et ajoute registre des sources, routage, politiques d’accès, fraîcheur, provenance, snapshots locaux, classement domaine/source, manifests auditables et catalogue global.
+## Rôle
 
-## Responsabilité officielle
+Le moteur coordonne registre, configuration, connecteurs, dlt, manifests, catalogue, fraîcheur, contrôles dynamiques et qualification CI Gold.
 
-```text
-source officielle
-→ acquisition
-→ conservation brute lorsque appropriée
-→ normalisation dlt
-→ Parquet/documents/snapshot
-→ classement domaine/source
-→ audit livraison
-→ manifest v2
-→ catalog global
-→ mise à jour automatique
-```
+## Initialisation
 
-Le nettoyage ML avancé, PII corpus, dédup fuzzy, mixture, tokenizer, packing et shards sont hors du moteur ; voir [`DOWNSTREAM_AUTOMATION.md`](DOWNSTREAM_AUTOMATION.md).
-
-## `IvoireDataEngine`
-
-Responsabilités :
-
-- résoudre la source et appliquer la politique d’accès ;
-- créer son arborescence locale ;
-- router vers un connecteur ;
-- lancer un pipeline dlt isolé par source ;
-- charger en Parquet lorsque structurable ;
-- conserver raw/documents ;
-- enregistrer fraîcheur succès/erreur ;
-- calculer la livraison réelle ;
-- écrire `manifest.json` ;
-- reconstruire `catalog.json` ;
-- produire `audit()`.
-
-## `delivery.py` — manifest v2
-
-Le manifest sépare :
+`IvoireDataEngine` charge :
 
 ```text
-sync.status
-
-delivery.status
-  FULL_STRUCTURED
-  DOCUMENTS_ONLY
-  SNAPSHOT_ONLY
-  METADATA_ONLY
-  EMPTY
-
-freshness.status
-  FRESH
-  DUE
-  STALE
-  NEVER_SYNCED
-
-transport.security
-  VERIFIED_TLS
-  DEGRADED_TLS
-  HTTP
+Settings
+RuntimeControl
+SourceRegistry
+FreshnessStore
+QualificationStore
 ```
 
-Le moteur garde le champ top-level `status` pour compatibilité avec les anciens consommateurs.
+Configuration effective :
 
-Les lignes Parquet sont calculées à partir des métadonnées `num_rows`, sans scanner les tables complètes.
+```text
+configs/runtime_sources.json
+→ configs/ci_gold_sources.json
+→ .ivoiredata/state/runtime_overrides.json
+```
 
-## Connecteurs spécialisés
+L’override local a toujours la priorité.
 
+## Registre
+
+`SourceRegistry.all()` retourne toutes les sources enregistrées, y compris désactivées.
+
+`SourceRegistry.list()` exclut `enabled=false`, puis peut filtrer :
+
+- sources publiques ;
+- sources automatiques.
+
+Un `sync(source_id)` direct refuse une source désactivée ou non autorisée à l’ingestion publique automatique.
+
+## Routage connecteurs
+
+Connecteurs spécialisés :
+
+```text
+data_gouv_ci
+world_bank_wdi
+world_bank_projects
+faostat_country
+uis_country
+ilostat_ref_area
+geoboundaries
+osm_geofabrik
+http_file
+bulk_catalog
+public_web
+```
+
+Les connecteurs spécialisés restent préférés lorsqu’une API/bulk stable existe. `public_web` couvre les pages/PDF institutionnels avec mêmes hôtes, robots.txt et limites de crawl.
+
+## Métadonnées CI Gold
+
+`metadata.py` fournit :
+
+- identité pays CIV ;
+- métadonnées source ;
+- classification déterministe domaine principal/secondaires ;
+- classification de type documentaire ;
+- confiance/statut de classification.
+
+Le moteur passe ces métadonnées aux connecteurs capables d’enrichir les lignes :
+
+- `public_web` ;
 - `data_gouv_ci` ;
-- `world_bank_wdi` ;
-- `world_bank_projects` ;
-- `ilostat_ref_area` — CSV pays, aucun filtre sur `obs_status` ;
-- `faostat_country` — ZIP bulk + filtre Côte d’Ivoire ;
-- `uis_country` — UIS Data API + `geoUnit=CIV` ;
-- `geoboundaries` ;
-- `osm_geofabrik`.
+- `world_bank_wdi`.
 
-Connecteurs génériques : `http_file`, `bulk_catalog`, `public_web`.
+## Pipeline par source
 
-Voir [`CONNECTORS.md`](CONNECTORS.md).
+Chaque source possède un pipeline dlt isolé et son dossier :
 
-## Freshness
+```text
+data_lake/domains/<domain>/<source_id>/
+```
 
-`.ivoiredata/state/freshness.json` garde `last_attempt`, `last_status`, `last_success` et les détails. `refresh_hours` décide si une source est due.
+Cette isolation limite les effets d’une évolution de schéma et simplifie suppression/restauration/requêtes.
 
-Lorsqu’un nouvel essai échoue mais qu’une ancienne donnée valide existe, le manifest v2 expose `STALE` sans supprimer la livraison précédente.
+## Manifest et catalogue
+
+Après chaque tentative, le moteur écrit un manifest schema v3 contenant :
+
+- sync ;
+- delivery ;
+- freshness ;
+- transport ;
+- rights ;
+- metadata CIV ;
+- warnings ;
+- inventaire.
+
+Le catalogue schema v3 regroupe les sources et domaines et porte `country_code=CIV`.
 
 ## Audit
 
-```bash
-ivoiredata audit
-```
+`engine.audit()` expose :
 
-et :
+- état source par source ;
+- distribution sync/delivery/freshness/transport ;
+- `rows.structured` ;
+- `rows.documents` ;
+- `rows.total_parquet`.
+
+Les autres audits sont :
 
 ```text
-GET /audit
+coverage_audit()
+quality_audit()
+ci_gold()
+write_ci_gold()
 ```
 
-lisent les manifests et l’état de fraîcheur pour fournir la couverture réellement exploitable. Voir [`AUDIT.md`](AUDIT.md).
+## Contrôle dynamique
 
-## Permissions
+`RuntimeControl` persiste dans :
 
-- `OPEN` / `OPEN_PUBLIC` : ingestion automatique possible ;
-- `MIXED` : uniquement `metadata_only=true` ;
-- `D_*` : jamais en auto-sync.
-
-## CLI
-
-```bash
-ivoiredata sources --public
-ivoiredata coverage
-ivoiredata status --public
-ivoiredata audit
-ivoiredata inventory
-ivoiredata source-path SOURCE_ID
-ivoiredata sync SOURCE_ID
-ivoiredata sync --all-public --force
-ivoiredata scheduler --once
-ivoiredata scheduler --interval 3600
-ivoiredata query SOURCE_ID "SELECT ..."
+```text
+.ivoiredata/state/runtime_overrides.json
 ```
 
-## Invariants v0.7
+Modes :
 
-1. un `success` ne prouve pas une livraison ;
-2. une source vide doit apparaître `EMPTY` ;
-3. une erreur ne doit pas effacer une ancienne version valide ;
-4. TLS dégradé doit être visible ;
-5. la donnée réelle reste locale ;
-6. un connecteur n’est déclaré validé qu’après test live local + audit.
+```text
+AUTOMATIC
+MANUAL
+DISABLED
+```
+
+L’interrupteur global `automatic_enabled` n’affecte jamais un sync manuel explicite.
+
+## Scheduler
+
+Le scheduler :
+
+1. relit les réglages à chaque cycle ;
+2. vérifie `automatic_enabled` ;
+3. sélectionne les sources `enabled + auto_sync + due` ;
+4. synchronise ;
+5. écrit fraîcheur/manifests/catalogue ;
+6. enregistre le cycle dans `QualificationStore`.
+
+Les sync manuels ne sont pas enregistrés comme cycles de qualification.
+
+## QualificationStore
+
+Fichier :
+
+```text
+.ivoiredata/state/ci_gold_qualification.json
+```
+
+État minimum : début, dernier cycle, nombre de cycles, erreurs, dernières erreurs.
+
+CI Gold exige au moins 14 jours réels, 14 cycles et aucune erreur pendant la fenêtre.
+
+## CI Gold
+
+`ci_gold.py` combine :
+
+```text
+coverage
+quality/provenance
+classification
+freshness
+stability
+rights
+handoff
+```
+
+Le score est informatif ; les gates obligatoires gardent la priorité.
+
+## Erreurs et conservation
+
+Une erreur upstream marque le run en erreur mais ne doit pas supprimer une ancienne livraison valide. L’audit peut alors afficher `STALE` + `SYNC_ERROR_WITH_STALE_DATA`.
+
+## Frontière
+
+Le moteur s’arrête au data lake CI Gold et aux preuves de qualification. Le nettoyage ML, PII, dédup, corpus, tokenizer et entraînement restent downstream.

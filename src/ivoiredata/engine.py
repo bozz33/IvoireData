@@ -16,8 +16,10 @@ from .connectors.world_bank import world_bank_wdi_resource
 from .connectors.world_bank_projects import world_bank_projects_resource
 from .delivery import ensure_source_layout, rebuild_catalog, source_paths, write_source_manifest
 from .freshness import FreshnessStore
+from .metadata import source_metadata
 from .models import SourceSpec, SyncResult
 from .pipeline import get_source_pipeline
+from .qualification import QualificationStore
 from .registry import SourceRegistry
 from .runtime_control import RuntimeControl
 from .settings import Settings
@@ -35,19 +37,37 @@ class IvoireDataEngine:
             self.settings.registry_path,
             self.settings.runtime_config_path,
             self.settings.runtime_overrides_path,
+            [self.settings.ci_gold_runtime_path],
         )
         self.freshness = FreshnessStore(self.settings.state_dir / "freshness.json")
+        self.qualification = QualificationStore(self.settings.qualification_path)
 
     def _resource_for(self, spec: SourceSpec, *, force: bool = False):
         p = ensure_source_layout(self.settings, spec)
         o = spec.options
+        meta = source_metadata(spec)
         if spec.connector == "data_gouv_ci":
             dsid = None if spec.source_id == "civ_datagouv_catalog" else dataset_id_from_public_url(spec.source_url)
-            return data_gouv_ci_resource(dataset_ids=[dsid] if dsid else None, force=force, user_agent=self.settings.user_agent, limit=o.get("limit"), snapshot_dir=p["raw"])
+            return data_gouv_ci_resource(
+                dataset_ids=[dsid] if dsid else None,
+                force=force,
+                user_agent=self.settings.user_agent,
+                limit=o.get("limit"),
+                snapshot_dir=p["raw"],
+                metadata_base=meta,
+            )
         if spec.connector == "http_file":
             return http_file_resource(source_id=spec.source_id, url=spec.source_url, force=force, user_agent=self.settings.user_agent, snapshot_dir=p["raw"])
         if spec.connector == "world_bank_wdi":
-            return world_bank_wdi_resource(country=str(o.get("country", "CIV")), source=int(o.get("source", 2)), indicator_limit=o.get("indicator_limit"), batch_size=int(o.get("batch_size", 60)), user_agent=self.settings.user_agent, snapshot_dir=p["raw"])
+            return world_bank_wdi_resource(
+                country=str(o.get("country", "CIV")),
+                source=int(o.get("source", 2)),
+                indicator_limit=o.get("indicator_limit"),
+                batch_size=int(o.get("batch_size", 60)),
+                user_agent=self.settings.user_agent,
+                snapshot_dir=p["raw"],
+                metadata_base=meta,
+            )
         if spec.connector == "world_bank_projects":
             return world_bank_projects_resource(country_code=str(o.get("country_code", "CI")), page_size=int(o.get("page_size", 50)), user_agent=self.settings.user_agent, snapshot_dir=p["raw"])
         if spec.connector == "faostat_country":
@@ -76,7 +96,19 @@ class IvoireDataEngine:
         if spec.connector == "bulk_catalog":
             return bulk_catalog_resource(source_id=spec.source_id, page_url=spec.source_url, user_agent=self.settings.user_agent, download_dir=p["raw"], download_patterns=list(o.get("download_patterns", [])), max_downloads=int(o.get("max_downloads", 0)), max_bytes=int(o.get("max_bytes", 250_000_000)))
         if spec.connector == "public_web":
-            return public_document_resource(source_id=spec.source_id, url=spec.source_url, force=force, user_agent=self.settings.user_agent, crawl=bool(o.get("crawl", False)), max_pages=int(o.get("max_pages", 1)), max_bytes=int(o.get("max_bytes", 20_000_000)), metadata_only=bool(o.get("metadata_only", False)), snapshot_dir=p["documents"], verify_ssl=bool(o.get("verify_ssl", True)))
+            return public_document_resource(
+                source_id=spec.source_id,
+                url=spec.source_url,
+                force=force,
+                user_agent=self.settings.user_agent,
+                crawl=bool(o.get("crawl", False)),
+                max_pages=int(o.get("max_pages", 1)),
+                max_bytes=int(o.get("max_bytes", 20_000_000)),
+                metadata_only=bool(o.get("metadata_only", False)),
+                snapshot_dir=p["documents"],
+                verify_ssl=bool(o.get("verify_ssl", True)),
+                metadata_base=meta,
+            )
         raise ValueError(f"unsupported connector {spec.connector!r} for {spec.source_id}")
 
     def _catalog(self) -> None:
@@ -133,6 +165,7 @@ class IvoireDataEngine:
             by_connector[spec.connector] = by_connector.get(spec.connector, 0) + 1
             by_domain[spec.domain] = by_domain.get(spec.domain, 0) + 1
         return {
+            "country_code": "CIV",
             "sources_registry": len(all_specs),
             "sources_enabled": len(specs),
             "sources_disabled": sum(1 for s in all_specs if not s.enabled),
@@ -150,6 +183,10 @@ class IvoireDataEngine:
         delivery_counts: dict[str, int] = {}
         sync_counts: dict[str, int] = {}
         freshness_counts: dict[str, int] = {}
+        transport_counts: dict[str, int] = {}
+        structured_rows = 0
+        document_rows = 0
+        total_rows = 0
         for spec in self.registry.list(public_only=public_only):
             manifest_path = source_paths(self.settings, spec)["manifest"]
             state = self.freshness.data.get(spec.source_id, {})
@@ -169,15 +206,19 @@ class IvoireDataEngine:
                 freshness_status = "NEVER_SYNCED"
             else:
                 freshness_status = "DUE" if self.freshness.due(spec) else "FRESH"
+            transport = manifest.get("transport_security") or manifest.get("transport", {}).get("security")
+            count = int(delivery.get("rows") or manifest.get("inventory", {}).get("tables", {}).get("rows") or 0)
+            meta = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else source_metadata(spec)
             row = {
                 "source_id": spec.source_id,
                 "domain": spec.domain,
+                "country_code": meta.get("country_code", "CIV"),
                 "connector": spec.connector,
                 "sync_status": sync_status,
                 "delivery_status": delivery_status,
                 "freshness_status": freshness_status,
-                "transport_security": manifest.get("transport_security") or manifest.get("transport", {}).get("security"),
-                "rows": int(delivery.get("rows") or manifest.get("inventory", {}).get("tables", {}).get("rows") or 0),
+                "transport_security": transport,
+                "rows": count,
                 "raw_files": int(delivery.get("raw_files") or manifest.get("inventory", {}).get("raw", {}).get("files") or 0),
                 "table_files": int(delivery.get("table_files") or manifest.get("inventory", {}).get("tables", {}).get("files") or 0),
                 "document_files": int(delivery.get("document_files") or manifest.get("inventory", {}).get("documents", {}).get("files") or 0),
@@ -188,16 +229,46 @@ class IvoireDataEngine:
             sync_counts[sync_status] = sync_counts.get(sync_status, 0) + 1
             delivery_counts[delivery_status] = delivery_counts.get(delivery_status, 0) + 1
             freshness_counts[freshness_status] = freshness_counts.get(freshness_status, 0) + 1
+            if transport:
+                transport_counts[str(transport)] = transport_counts.get(str(transport), 0) + 1
+            total_rows += count
+            if delivery_status == "FULL_STRUCTURED":
+                structured_rows += count
+            elif delivery_status == "DOCUMENTS_ONLY":
+                document_rows += count
 
         usable = sum(1 for row in rows if row["delivery_status"] != "EMPTY")
         return {
             "summary": {
+                "country_code": "CIV",
                 "sources": len(rows),
                 "usable_delivery": usable,
                 "empty_delivery": len(rows) - usable,
                 "sync": dict(sorted(sync_counts.items())),
                 "delivery": dict(sorted(delivery_counts.items())),
                 "freshness": dict(sorted(freshness_counts.items())),
+                "transport": dict(sorted(transport_counts.items())),
+                "rows": {
+                    "structured": structured_rows,
+                    "documents": document_rows,
+                    "total_parquet": total_rows,
+                },
             },
             "rows": rows,
         }
+
+    def coverage_audit(self) -> dict:
+        from .ci_gold import coverage_audit
+        return coverage_audit(self)
+
+    def quality_audit(self) -> dict:
+        from .ci_gold import quality_audit
+        return quality_audit(self)
+
+    def ci_gold(self) -> dict:
+        from .ci_gold import ci_gold_report
+        return ci_gold_report(self)
+
+    def write_ci_gold(self) -> dict:
+        from .ci_gold import write_ci_gold_report
+        return write_ci_gold_report(self)

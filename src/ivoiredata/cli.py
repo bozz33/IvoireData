@@ -15,6 +15,9 @@ def parser():
     s = sub.add_parser("sources"); s.add_argument("--public", action="store_true"); s.add_argument("--all", action="store_true", help="include disabled sources")
     s = sub.add_parser("status"); s.add_argument("--public", action="store_true"); s.add_argument("--all", action="store_true", help="include disabled sources")
     sub.add_parser("coverage")
+    sub.add_parser("coverage-audit")
+    sub.add_parser("quality-audit")
+    s = sub.add_parser("ci-gold"); s.add_argument("--write", action="store_true", help="write qualification artifacts under data_lake/reports/ci-gold")
     sub.add_parser("inventory")
     s = sub.add_parser("audit"); s.add_argument("--all", action="store_true", help="include controlled/manual sources")
     s = sub.add_parser("source-path"); s.add_argument("source_id")
@@ -37,6 +40,12 @@ def parser():
     upd_subs.add_parser("enable")
     upd_subs.add_parser("disable")
     s_interval = upd_subs.add_parser("interval"); s_interval.add_argument("seconds", type=int)
+
+    qual = sub.add_parser("qualification")
+    qual_subs = qual.add_subparsers(dest="qualification_action", required=True)
+    qual_subs.add_parser("status")
+    qual_subs.add_parser("start")
+    qual_subs.add_parser("reset")
     return p
 
 
@@ -55,6 +64,7 @@ def _manifest_summary(engine: IvoireDataEngine, spec) -> dict:
         "transport_security": manifest.get("transport_security") or manifest.get("transport", {}).get("security"),
         "rows": delivery.get("rows", manifest.get("inventory", {}).get("tables", {}).get("rows", 0)),
         "warnings": manifest.get("warnings", []),
+        "metadata": manifest.get("metadata", {}),
     }
 
 
@@ -106,6 +116,18 @@ def _updates_control(engine: IvoireDataEngine, args) -> int:
     return 0
 
 
+def _qualification_control(engine: IvoireDataEngine, args) -> int:
+    action = args.qualification_action
+    if action == "status":
+        payload = engine.qualification.status()
+    elif action in {"start", "reset"}:
+        payload = engine.qualification.start()
+    else:
+        raise SystemExit(f"unknown qualification action: {action}")
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0
+
+
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
     engine = IvoireDataEngine()
@@ -138,6 +160,13 @@ def main(argv=None) -> int:
         return 0
     if args.command == "coverage":
         print(json.dumps(engine.coverage(), ensure_ascii=False, indent=2)); return 0
+    if args.command == "coverage-audit":
+        print(json.dumps(engine.coverage_audit(), ensure_ascii=False, indent=2)); return 0
+    if args.command == "quality-audit":
+        print(json.dumps(engine.quality_audit(), ensure_ascii=False, indent=2)); return 0
+    if args.command == "ci-gold":
+        payload = engine.write_ci_gold() if args.write else engine.ci_gold()
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str)); return 0
     if args.command == "inventory":
         print(json.dumps(inventory(engine.settings, engine.registry.list()), ensure_ascii=False, indent=2)); return 0
     if args.command == "audit":
@@ -169,6 +198,8 @@ def main(argv=None) -> int:
         return _source_control(engine, args)
     if args.command == "updates":
         return _updates_control(engine, args)
+    if args.command == "qualification":
+        return _qualification_control(engine, args)
     return 2
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, Iterable
 
 if TYPE_CHECKING:
     from .registry import SourceRegistry
@@ -30,29 +30,42 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return out
 
 
-def load_runtime_config(base_path: Path | None, overrides_path: Path | None = None) -> dict[str, Any]:
-    """Return immutable packaged config merged with mutable local overrides."""
-    return _deep_merge(_read_json(base_path), _read_json(overrides_path))
+def load_runtime_config(
+    base_path: Path | None,
+    overrides_path: Path | None = None,
+    overlay_paths: Iterable[Path] | None = None,
+) -> dict[str, Any]:
+    """Merge packaged defaults, packaged CI Gold overlays, then mutable local overrides."""
+    merged = _read_json(base_path)
+    for path in overlay_paths or []:
+        merged = _deep_merge(merged, _read_json(path))
+    return _deep_merge(merged, _read_json(overrides_path))
 
 
 class RuntimeControl:
     """Persistent runtime settings stored under `.ivoiredata/state`.
 
-    The packaged `configs/runtime_sources.json` remains an immutable default. User changes
-    are written to `runtime_overrides.json`, which is part of the persistent/shared state
-    volume in Docker. This makes source modes and the global automatic-update switch
-    survive restarts and remain visible to API, scheduler and one-shot sync containers.
+    Versioned config files are immutable defaults. User changes live in
+    `runtime_overrides.json`, shared by API, scheduler and one-shot containers.
     """
 
     def __init__(self, settings: Settings):
         self.settings = settings
         self.path = settings.runtime_overrides_path
 
+    @property
+    def overlay_paths(self) -> list[Path]:
+        return [self.settings.ci_gold_runtime_path]
+
     def overrides(self) -> dict[str, Any]:
         return _read_json(self.path)
 
     def merged(self) -> dict[str, Any]:
-        return load_runtime_config(self.settings.runtime_config_path, self.path)
+        return load_runtime_config(
+            self.settings.runtime_config_path,
+            self.path,
+            self.overlay_paths,
+        )
 
     @property
     def automatic_enabled(self) -> bool:
@@ -130,4 +143,5 @@ class RuntimeControl:
             "manual_public_sources": sum(1 for s in public_enabled if not s.auto_sync),
             "controlled_sources": sum(1 for s in enabled if not s.public),
             "overrides_path": str(self.path),
+            "packaged_overlays": [str(path) for path in self.overlay_paths if path.exists()],
         }

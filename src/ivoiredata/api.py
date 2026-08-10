@@ -11,7 +11,7 @@ from .query import query_source_sql
 from .ranking import rank_sources
 from .search import search_documents
 
-app = FastAPI(title="IvoireData Engine", version="0.7.2")
+app = FastAPI(title="IvoireData Engine", version="0.8.0")
 
 
 class SQLRequest(BaseModel):
@@ -33,7 +33,7 @@ class SourceSettingsRequest(BaseModel):
 @app.get("/health")
 def health():
     engine = IvoireDataEngine()
-    return {"status": "ok", "engine": "IvoireData", "version": "0.7.2", "storage": "local", "data_dir": str(engine.settings.data_dir)}
+    return {"status": "ok", "engine": "IvoireData", "version": "0.8.0", "storage": "local", "country_code": "CIV", "data_dir": str(engine.settings.data_dir)}
 
 
 @app.get("/sources")
@@ -57,6 +57,7 @@ def status(public_only: bool = True):
         rows.append({
             "source_id": spec.source_id,
             "domain": spec.domain,
+            "country_code": audit.get("country_code", "CIV"),
             "enabled": spec.enabled,
             "due": engine.freshness.due(spec),
             "refresh_hours": spec.refresh_hours,
@@ -75,6 +76,36 @@ def status(public_only: bool = True):
 @app.get("/coverage")
 def coverage():
     return IvoireDataEngine().coverage()
+
+
+@app.get("/coverage-audit")
+def coverage_audit():
+    return IvoireDataEngine().coverage_audit()
+
+
+@app.get("/quality-audit")
+def quality_audit():
+    return IvoireDataEngine().quality_audit()
+
+
+@app.get("/ci-gold")
+def ci_gold():
+    return IvoireDataEngine().ci_gold()
+
+
+@app.post("/ci-gold/report")
+def ci_gold_report():
+    return IvoireDataEngine().write_ci_gold()
+
+
+@app.get("/qualification")
+def qualification():
+    return IvoireDataEngine().qualification.status()
+
+
+@app.post("/qualification/start")
+def qualification_start():
+    return IvoireDataEngine().qualification.start()
 
 
 @app.get("/audit")

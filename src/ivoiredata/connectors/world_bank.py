@@ -4,6 +4,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, Iterable
 
+from ..metadata import classify_from_base
 from ..snapshots import save_snapshot
 
 API = "https://api.worldbank.org/v2"
@@ -51,12 +52,6 @@ def _paged(session, url: str, params: dict[str, Any], *, snapshot_dir: Path | No
 
 
 def _fetch_country_indicators(session, country: str, codes: list[str], source: int, *, snapshot_dir, snapshot_name) -> list[dict[str, Any]]:
-    """Récupère les valeurs d'un batch d'indicateurs, en subdivisant récursivement
-    si l'API renvoie 400 (un indicateur invalide fait rejeter tout le batch).
-
-    Les codes fautifs sont journalisés et ignorés : ils ne doivent pas faire échouer
-    toute la source WDI.
-    """
     import requests
 
     joined = ";".join(codes)
@@ -71,8 +66,7 @@ def _fetch_country_indicators(session, country: str, codes: list[str], source: i
     except requests.exceptions.HTTPError as exc:
         status = getattr(getattr(exc, "response", None), "status_code", None)
         if status != 400 or len(codes) <= 1:
-            raise  # autre erreur, ou code unique déjà rejeté : on remonte
-        # 400 sur un batch : on subdivise en deux pour isoler le/les indicateurs fautifs.
+            raise
         mid = len(codes) // 2
         out: list[dict[str, Any]] = []
         for half_index, half in enumerate((codes[:mid], codes[mid:])):
@@ -86,19 +80,38 @@ def _fetch_country_indicators(session, country: str, codes: list[str], source: i
         return out
 
 
+def _indicator_classification(indicator: dict[str, Any], metadata_base: dict[str, Any]) -> dict[str, Any]:
+    code = str(indicator.get("id") or "")
+    text = " ".join(str(indicator.get(key) or "") for key in ("name", "sourceNote", "sourceOrganization", "topics"))
+    classified = classify_from_base(metadata_base, f"{API}/indicator/{code}", text, document_type="DATASET")
+    return {
+        "__ivoiredata_country_code": classified.get("country_code"),
+        "__ivoiredata_country_name": classified.get("country_name"),
+        "__ivoiredata_primary_domain": classified.get("primary_domain"),
+        "__ivoiredata_secondary_domains_json": classified.get("secondary_domains_json"),
+        "__ivoiredata_language": classified.get("language"),
+        "__ivoiredata_document_type": "DATASET",
+        "__ivoiredata_geographic_scope": classified.get("geographic_scope"),
+        "__ivoiredata_classification_status": classified.get("classification_status"),
+        "__ivoiredata_classification_confidence": classified.get("classification_confidence"),
+    }
+
+
 def world_bank_wdi_resource(
     *,
     country: str = "CIV",
     source: int = 2,
     indicator_limit: int | None = None,
     batch_size: int = 60,
-    user_agent: str = "IvoireData/0.6",
+    user_agent: str = "IvoireData/0.8",
     snapshot_dir: Path | None = None,
+    metadata_base: dict[str, Any] | None = None,
 ):
     import dlt
     import requests
 
     batch_size = max(1, min(int(batch_size), 60))
+    base = dict(metadata_base or {})
 
     @dlt.resource(name="world_bank_wdi", write_disposition="replace")
     def resource():
@@ -114,10 +127,15 @@ def world_bank_wdi_resource(
         if indicator_limit is not None:
             indicators = indicators[: max(0, int(indicator_limit))]
         codes = [str(row.get("id")) for row in indicators if row.get("id")]
+        classifications: dict[str, dict[str, Any]] = {}
         for indicator in indicators:
             row = dict(indicator)
-            row["__ivoiredata_source_url"] = f"{API}/indicator/{row.get('id', '')}"
+            code = str(row.get("id") or "")
+            classified = _indicator_classification(row, base)
+            classifications[code] = classified
+            row["__ivoiredata_source_url"] = f"{API}/indicator/{code}"
             row["__ivoiredata_country"] = country
+            row.update(classified)
             yield dlt.mark.with_table_name(row, "worldbank_wdi_indicators")
         for batch_index, codes_batch in enumerate(_chunks(codes, batch_size)):
             joined = ";".join(codes_batch)
@@ -128,8 +146,11 @@ def world_bank_wdi_resource(
             )
             for row in rows:
                 item = dict(row)
+                indicator = item.get("indicator") if isinstance(item.get("indicator"), dict) else {}
+                code = str(indicator.get("id") or "")
                 item["__ivoiredata_country"] = country
-                item["__ivoiredata_source_url"] = f"{API}/country/{country}/indicator/{joined}?source={source}"
+                item["__ivoiredata_source_url"] = f"{API}/country/{country}/indicator/{code or joined}?source={source}"
+                item.update(classifications.get(code, {}))
                 yield dlt.mark.with_table_name(item, "worldbank_wdi")
 
     return resource()

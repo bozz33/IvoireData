@@ -1,107 +1,59 @@
-# Audit IvoireData v0.7
+# Audit IvoireData v0.8.0
 
-La v0.7 sépare **l’exécution d’une synchronisation** de **la qualité réelle de la livraison**. Cette distinction évite qu’une source soit considérée couverte uniquement parce que la requête HTTP ou le pipeline dlt s’est terminé sans exception.
+IvoireData distingue désormais **l’exécution**, **la livraison**, **la fraîcheur**, **le transport**, **la couverture nationale** et **la qualité CI Gold**.
 
-## Commande
+## Audit de livraison
 
 ```bash
 ivoiredata audit
 ```
 
-Par défaut, l’audit porte sur les sources publiques synchronisables. Utiliser :
+API : `GET /audit`.
 
-```bash
-ivoiredata audit --all
-```
+Dimensions :
 
-pour inclure les sources manuelles/contrôlées du registre.
+- `sync_status` : `SUCCESS`, `ERROR`, `NEVER` ;
+- `delivery_status` : `FULL_STRUCTURED`, `DOCUMENTS_ONLY`, `SNAPSHOT_ONLY`, `METADATA_ONLY`, `EMPTY` ;
+- `freshness_status` : `FRESH`, `DUE`, `STALE`, `NEVER_SYNCED` ;
+- `transport_security` : `VERIFIED_TLS`, `DEGRADED_TLS`, `HTTP`.
 
-API :
-
-```text
-GET /audit
-```
-
-## Dimensions
-
-### `sync_status`
-
-- `SUCCESS` : le dernier run s’est terminé sans exception ;
-- `ERROR` : le dernier run a échoué ;
-- `NEVER` : source non encore exécutée.
-
-### `delivery_status`
-
-- `FULL_STRUCTURED` : au moins une table Parquet métier contient des lignes ;
-- `DOCUMENTS_ONLY` : pas de table structurée, mais documents/pages réellement archivés ;
-- `SNAPSHOT_ONLY` : payload brut réel, sans représentation structurée ;
-- `METADATA_ONLY` : source volontairement limitée aux métadonnées publiques ;
-- `EMPTY` : aucune livraison exploitable constatée.
-
-Le comptage des lignes Parquet utilise les métadonnées de fichier (`num_rows`) et non une lecture complète des datasets.
-
-### `freshness_status`
-
-- `FRESH` : dernière version valide encore dans sa fenêtre `refresh_hours` ;
-- `DUE` : dernière version valide existe mais une nouvelle vérification est due ;
-- `STALE` : le dernier essai a échoué alors qu’une ancienne version valide existe ;
-- `NEVER_SYNCED` : aucune version valide enregistrée.
-
-### `transport_security`
-
-- `VERIFIED_TLS` : HTTPS avec validation certificat ;
-- `DEGRADED_TLS` : HTTPS avec `verify_ssl=false` pour un upstream au certificat cassé/incomplet ;
-- `HTTP` : source en HTTP non chiffré.
-
-## Warnings
-
-- `EMPTY_AFTER_SUCCESS` : le pipeline a réussi mais n’a livré aucun payload/table/document ;
-- `SYNC_ERROR_WITH_STALE_DATA` : le dernier run a échoué mais des données antérieures restent disponibles ;
-- `TLS_VERIFICATION_DISABLED` : TLS non vérifié pour cette source ;
-- `METADATA_ONLY_SOURCE` : la politique limite volontairement la livraison aux métadonnées.
-
-## Règle de couverture
-
-Ne jamais déduire la couverture à partir de `sync_status` seul.
-
-Exemple :
+Le résumé sépare :
 
 ```text
-civ_faostat
-sync_status      SUCCESS
-delivery_status  EMPTY
+rows.structured
+rows.documents
+rows.total_parquet
+transport.*
 ```
 
-signifie : le code a terminé, mais aucune donnée utile n’a été livrée.
+Les lignes Parquet sont comptées via leurs métadonnées, sans scanner tout le contenu.
 
-À l’inverse :
+## Manifest v3
 
-```text
-civ_treasury_debt
-sync_status      ERROR
-delivery_status  DOCUMENTS_ONLY
-freshness_status STALE
-```
-
-signifie : l’upstream échoue actuellement mais la dernière livraison valide reste disponible localement.
-
-## Manifest v2
-
-Chaque `manifest.json` conserve les anciens champs principaux pour compatibilité et ajoute :
+Exemple simplifié :
 
 ```json
 {
+  "schema_version": 3,
+  "source_id": "civ_faostat",
+  "country_code": "CIV",
+  "country_name": "Côte d'Ivoire",
+  "domain": "agriculture",
   "status": "success",
   "delivery_status": "FULL_STRUCTURED",
   "freshness_status": "FRESH",
   "transport_security": "VERIFIED_TLS",
-  "sync": {},
-  "delivery": {
-    "rows": 102296,
-    "table_files": 3,
-    "raw_files": 10,
-    "document_files": 0
+  "metadata": {
+    "country_code": "CIV",
+    "source_domain": "agriculture",
+    "primary_domain": "agriculture",
+    "language": "fr",
+    "geographic_scope": "NATIONAL",
+    "rights_tier": "B_SOURCE_TERMS",
+    "classification_status": "CONFIGURED"
   },
+  "sync": {},
+  "delivery": {},
   "freshness": {},
   "transport": {},
   "rights": {},
@@ -109,13 +61,77 @@ Chaque `manifest.json` conserve les anciens champs principaux pour compatibilit�
 }
 ```
 
-## Après une mise à jour du moteur
+## Warnings
 
-Les anciens manifests v0.6 ne contiennent pas encore toutes ces métriques. Le moyen recommandé de les migrer est de resynchroniser les sources :
+- `EMPTY_AFTER_SUCCESS` ;
+- `SYNC_ERROR_WITH_STALE_DATA` ;
+- `TLS_VERIFICATION_DISABLED` ;
+- `METADATA_ONLY_SOURCE`.
+
+## Audit de couverture
+
+```bash
+ivoiredata coverage-audit
+```
+
+Compare la matrice `configs/ci_coverage.json` aux sources enregistrées et aux livraisons locales.
+
+Statuts : `COVERED`, `PARTIAL`, `CONTROLLED`, `UNAVAILABLE`, `UNRESOLVED`, `MISSING`.
+
+Un P0 manquant/non résolu bloque CI Gold.
+
+## Audit qualité
+
+```bash
+ivoiredata quality-audit
+```
+
+Contrôle notamment :
+
+- manifest présent ;
+- metadata CIV complète ;
+- droits présents ;
+- aucune livraison P0 vide ;
+- aucune erreur P0 ;
+- colonnes documentaires CI Gold présentes dans les Parquet Web.
+
+## Audit CI Gold
+
+```bash
+ivoiredata ci-gold
+```
+
+Le résultat expose :
+
+```text
+score
+approved
+components
+gates
+coverage
+quality
+qualification
+audit_summary
+```
+
+Pour écrire les preuves :
+
+```bash
+ivoiredata ci-gold --write
+```
+
+## Migration depuis v0.7.x
+
+Les manifests v2 et anciens Parquet documentaires sont lisibles mais ne satisfont pas nécessairement les nouvelles métadonnées. Après mise à jour :
 
 ```bash
 ivoiredata sync --all-public --force
 ivoiredata audit
+ivoiredata quality-audit
 ```
 
-Les données ne sont pas envoyées vers GitHub : l’audit porte uniquement sur le data lake local.
+Le full sync régénère les manifests v3 et enrichit les lignes documentaires.
+
+## Règle de couverture
+
+Ne jamais annoncer une couverture à partir de `SUCCESS` seul. La couverture nationale doit provenir de `coverage-audit`, et CI Gold final exige `approved=true` après la qualification réelle de stabilité.
