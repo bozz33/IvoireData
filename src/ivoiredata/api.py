@@ -12,7 +12,7 @@ from .query import query_source_sql
 from .ranking import rank_sources
 from .search import search_documents
 
-app = FastAPI(title="IvoireData Engine", version="0.8.1")
+app = FastAPI(title="IvoireData Engine", version="0.8.2")
 
 
 class SQLRequest(BaseModel):
@@ -34,7 +34,11 @@ class SourceSettingsRequest(BaseModel):
 @app.get("/health")
 def health():
     engine = IvoireDataEngine()
-    return {"status": "ok", "engine": "IvoireData", "version": "0.8.1", "storage": "local", "country_code": "CIV", "data_dir": str(engine.settings.data_dir)}
+    return {
+        "status": "ok", "engine": "IvoireData", "version": "0.8.2",
+        "storage": "local", "country_code": "CIV", "data_dir": str(engine.settings.data_dir),
+        "incremental_upstream_state": str(engine.settings.upstream_state_path),
+    }
 
 
 @app.get("/sources")
@@ -72,6 +76,16 @@ def coverage_audit(): return IvoireDataEngine().coverage_audit()
 
 @app.get("/quality-audit")
 def quality_audit(): return IvoireDataEngine().quality_audit()
+
+@app.get("/upstreams")
+def upstreams(source_id: str | None = None):
+    try: return IvoireDataEngine().upstream_audit(source_id)
+    except KeyError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+@app.get("/upstreams/{source_id}")
+def upstream_source(source_id: str):
+    try: return IvoireDataEngine().upstream_audit(source_id)
+    except KeyError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.get("/discoveries")
 def discoveries(limit: int = 100): return data_gouv_discoveries(IvoireDataEngine(), limit=min(max(limit, 1), 1000))
