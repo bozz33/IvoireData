@@ -31,6 +31,7 @@ class SourceRegistry:
         csv_path: Path,
         runtime_path: Path | None = None,
         runtime_overrides_path: Path | None = None,
+        runtime_overlay_paths: list[Path] | None = None,
     ) -> "SourceRegistry":
         sources: dict[str, SourceSpec] = {}
         with csv_path.open(encoding="utf-8", newline="") as f:
@@ -47,7 +48,7 @@ class SourceRegistry:
                 )
                 sources[spec.source_id] = spec
 
-        config = load_runtime_config(runtime_path, runtime_overrides_path)
+        config = load_runtime_config(runtime_path, runtime_overrides_path, runtime_overlay_paths)
         defaults = config.get("defaults", {})
         overrides = config.get("sources", {})
         for sid, spec in list(sources.items()):

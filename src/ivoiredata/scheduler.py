@@ -10,7 +10,9 @@ def run_once():
     engine = IvoireDataEngine()
     if not engine.runtime.automatic_enabled:
         return []
-    return engine.sync_due(auto_only=True, public_only=True)
+    results = engine.sync_due(auto_only=True, public_only=True)
+    engine.qualification.record_cycle(results)
+    return results
 
 
 def run_forever(interval: int | None = None) -> None:
@@ -18,7 +20,9 @@ def run_forever(interval: int | None = None) -> None:
     while True:
         engine = IvoireDataEngine()
         if engine.runtime.automatic_enabled:
-            for result in engine.sync_due(auto_only=True, public_only=True):
+            results = engine.sync_due(auto_only=True, public_only=True)
+            engine.qualification.record_cycle(results)
+            for result in results:
                 print(result)
         sleep_seconds = explicit_interval
         if sleep_seconds is None:

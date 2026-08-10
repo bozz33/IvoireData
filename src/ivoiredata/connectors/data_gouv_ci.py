@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote, unquote, urlparse
 
+from ..metadata import classify_from_base
 from ..snapshots import save_snapshot
 
 PORTAL = "https://data.gouv.ci"
@@ -56,8 +57,6 @@ def _decode(data: bytes) -> str:
 
 def _rows(data: bytes) -> Iterable[dict[str, Any]]:
     text = _decode(data)
-    # Certains datasets (ex. géométries GeoJSON inline, longues descriptions) contiennent
-    # des champs dépassant la limite par défaut du module csv (128 Ko). On lève la limite.
     try:
         csv.field_size_limit(max(csv.field_size_limit(), 16 * 1024 * 1024))
     except OverflowError:
@@ -93,16 +92,35 @@ def dataset_id_from_public_url(url: str) -> str | None:
     return unquote(path.split(marker, 1)[1]).strip() or None if marker in path else None
 
 
+def _classification(meta: dict[str, Any], dsid: str, metadata_base: dict[str, Any]) -> dict[str, Any]:
+    text = " ".join(str(meta.get(key) or "") for key in ("title", "name", "description", "keywords", "topics", "slug"))
+    classified = classify_from_base(metadata_base, f"{PORTAL}/datasets/{dsid}", text, document_type="DATASET")
+    return {
+        "__ivoiredata_country_code": classified.get("country_code"),
+        "__ivoiredata_country_name": classified.get("country_name"),
+        "__ivoiredata_primary_domain": classified.get("primary_domain"),
+        "__ivoiredata_secondary_domains_json": classified.get("secondary_domains_json"),
+        "__ivoiredata_language": classified.get("language"),
+        "__ivoiredata_document_type": "DATASET",
+        "__ivoiredata_geographic_scope": classified.get("geographic_scope"),
+        "__ivoiredata_classification_status": classified.get("classification_status"),
+        "__ivoiredata_classification_confidence": classified.get("classification_confidence"),
+    }
+
+
 def data_gouv_ci_resource(
     *,
     dataset_ids: list[str] | None = None,
     limit: int | None = None,
     force: bool = False,
-    user_agent: str = "IvoireData/0.6",
+    user_agent: str = "IvoireData/0.8",
     snapshot_dir: Path | None = None,
+    metadata_base: dict[str, Any] | None = None,
 ):
     import dlt
     import requests
+
+    base = dict(metadata_base or {})
 
     @dlt.resource(name="data_gouv_ci", write_disposition="replace")
     def resource():
@@ -114,19 +132,21 @@ def data_gouv_ci_resource(
         selected = []
         for meta in catalog:
             dsid = _dataset_id(meta)
-            # Un dataset peut être identifié par son id technique OU son slug : on accepte
-            # les deux, car dataset_id_from_public_url() renvoie le slug extrait de l'URL.
             identifiers = {dsid, meta.get("slug")} if dsid else set()
             if not wanted or identifiers & wanted:
                 selected.append(meta)
         if limit is not None:
             selected = selected[:limit]
 
+        classifications: dict[str, dict[str, Any]] = {}
         for meta in catalog:
             dsid = _dataset_id(meta)
             if dsid:
+                classified = _classification(meta, dsid, base)
+                classifications[dsid] = classified
                 row = dict(meta)
                 row["__ivoiredata_source_url"] = f"{PORTAL}/datasets/{dsid}"
+                row.update(classified)
                 yield dlt.mark.with_table_name(row, "datagouv_catalog")
 
         for meta in selected:
@@ -140,9 +160,6 @@ def data_gouv_ci_resource(
                 r = session.get(url, timeout=180, headers={"Accept": "text/csv,application/csv,text/plain,*/*;q=0.5"})
                 r.raise_for_status()
             except Exception as exc:
-                # Certains datasets du catalogue ne sont pas accessibles via /full (permissions,
-                # statut non finalisé, etc.). On ne doit pas faire échouer toute la source :
-                # on journalise et on passe au dataset suivant.
                 print(f"[data_gouv_ci] dataset ignoré {dsid} -> {exc}", flush=True)
                 continue
             if "text/html" in r.headers.get("content-type", "").lower() and r.content.lstrip().startswith(b"<"):
@@ -161,11 +178,10 @@ def data_gouv_ci_resource(
             try:
                 parsed_rows = list(enumerate(_rows(r.content)))
             except Exception as exc:
-                # CSV mal formé ou encodage exotique : on conserve le snapshot brut mais
-                # on n'expose pas de lignes structurées pour ce dataset.
                 print(f"[data_gouv_ci] dataset non parsable {dsid} -> {exc}", flush=True)
                 state[dsid] = sig
                 continue
+            classified = classifications.get(dsid) or _classification(meta, dsid, base)
             for idx, row in parsed_rows:
                 row.update({
                     "__ivoiredata_dataset_id": dsid,
@@ -173,6 +189,7 @@ def data_gouv_ci_resource(
                     "__ivoiredata_row_index": idx,
                     "__ivoiredata_raw_sha256": raw_sha,
                     "__ivoiredata_raw_path": snapshot.get("local_path"),
+                    **classified,
                 })
                 yield dlt.mark.with_table_name(row, table)
             state[dsid] = sig

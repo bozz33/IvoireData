@@ -33,6 +33,8 @@ def _settings(tmp_path: Path, monkeypatch) -> Settings:
         state_dir=tmp_path / "state",
         registry_path=registry,
         runtime_config_path=runtime,
+        ci_gold_runtime_path=tmp_path / "ci_gold.json",
+        ci_coverage_path=tmp_path / "coverage.json",
     )
 
 
@@ -47,6 +49,7 @@ def test_runtime_overrides_persist_and_are_merged(tmp_path: Path, monkeypatch):
         settings.registry_path,
         settings.runtime_config_path,
         settings.runtime_overrides_path,
+        [settings.ci_gold_runtime_path],
     )
     spec = registry.get("demo")
 
@@ -65,6 +68,7 @@ def test_disabled_source_is_excluded_from_registry_list(tmp_path: Path, monkeypa
         settings.registry_path,
         settings.runtime_config_path,
         settings.runtime_overrides_path,
+        [settings.ci_gold_runtime_path],
     )
     assert registry.get("demo").enabled is False
     assert registry.list() == []
@@ -85,14 +89,20 @@ def test_scheduler_global_disable_prevents_sync(monkeypatch):
     assert scheduler.run_once() == []
 
 
-def test_scheduler_runs_automatic_sources_when_enabled(monkeypatch):
+def test_scheduler_runs_automatic_sources_and_records_qualification(monkeypatch):
     called = []
+    recorded = []
 
     class FakeRuntime:
         automatic_enabled = True
 
+    class FakeQualification:
+        def record_cycle(self, results):
+            recorded.append(list(results))
+
     class FakeEngine:
         runtime = FakeRuntime()
+        qualification = FakeQualification()
 
         def sync_due(self, **kwargs):
             called.append(kwargs)
@@ -101,6 +111,7 @@ def test_scheduler_runs_automatic_sources_when_enabled(monkeypatch):
     monkeypatch.setattr(scheduler, "IvoireDataEngine", FakeEngine)
     assert scheduler.run_once() == ["ok"]
     assert called == [{"auto_only": True, "public_only": True}]
+    assert recorded == [["ok"]]
 
 
 def _inventory(*, rows=0, raw_files=0, document_files=0):
