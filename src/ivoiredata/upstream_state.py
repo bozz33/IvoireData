@@ -93,8 +93,13 @@ class UpstreamState:
             "last_checked": _now(),
             "last_result": "UNCHANGED",
             "unchanged_reason": reason,
+            # UNCHANGED is evidence that a previous version is already materialized or
+            # cached locally. This also lets migration-adopted datasets participate in
+            # future removed-upstream reconciliation.
+            "downloaded": True,
             "removed": False,
             "error": None,
+            "http_status": None,
         }
         if signature is not None:
             values["signature"] = signature
@@ -130,6 +135,7 @@ class UpstreamState:
             last_downloaded=now,
             last_result="DOWNLOADED",
             error=None,
+            http_status=None,
         )
         if extra:
             values.update(extra)
@@ -155,6 +161,8 @@ class UpstreamState:
         return self._update(
             source_id, artifact_id,
             removed=True,
+            error=None,
+            http_status=None,
             last_checked=_now(),
             last_result="REMOVED_UPSTREAM",
         )
