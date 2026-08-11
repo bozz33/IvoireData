@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
 import re
+from pathlib import Path
 from typing import Any
 
 from .delivery import ensure_source_layout
 from .dlt_tables import make_incremental_replace_safe
+from .locks import file_lock
 from .models import SourceSpec
 from .settings import Settings
 
@@ -27,19 +30,29 @@ def _pipeline_name(base: str, source_id: str) -> str:
 
 
 class _SafePipelineProxy:
-    """Delegate to dlt while isolating replace semantics per emitted table."""
+    """Delegate to dlt while isolating tables and serializing one source at a time."""
 
-    def __init__(self, pipeline: Any, *, protect_partial_replace: bool):
+    def __init__(self, pipeline: Any, *, protect_partial_replace: bool, lock_path: Path | None = None):
         self._pipeline = pipeline
         self._protect_partial_replace = protect_partial_replace
+        self._lock_path = lock_path
 
     def __getattr__(self, name: str):
         return getattr(self._pipeline, name)
 
-    def run(self, data: Any, *args: Any, **kwargs: Any):
+    def _run(self, data: Any, *args: Any, **kwargs: Any):
         if self._protect_partial_replace and hasattr(data, "apply_hints") and hasattr(data, "add_map"):
             data = make_incremental_replace_safe(data)
         return self._pipeline.run(data, *args, **kwargs)
+
+    def run(self, data: Any, *args: Any, **kwargs: Any):
+        if self._lock_path is None:
+            return self._run(data, *args, **kwargs)
+        timeout = float(os.getenv("IVOIREDATA_SOURCE_LOCK_TIMEOUT") or 21600)
+        # API, scheduler and sync-once share `.ivoiredata`; only the same source is
+        # serialized. Different sources remain free to run independently.
+        with file_lock(self._lock_path, timeout=max(1.0, timeout)):
+            return self._run(data, *args, **kwargs)
 
 
 def get_pipeline(settings: Settings):
@@ -66,6 +79,8 @@ def get_source_pipeline(settings: Settings, spec: SourceSpec):
     Incremental structured connectors may emit only changed tables. For those
     connectors the proxy rewrites resource-level replace semantics into independent
     per-table variants, preventing an unchanged omitted table from being truncated.
+    A shared file lock also prevents concurrent runs of the *same* source from API,
+    scheduler and one-shot containers.
     """
     import dlt
     from dlt.destinations import filesystem
@@ -84,4 +99,5 @@ def get_source_pipeline(settings: Settings, spec: SourceSpec):
     return _SafePipelineProxy(
         pipeline,
         protect_partial_replace=spec.connector in _INCREMENTAL_PARTIAL_CONNECTORS,
+        lock_path=settings.state_dir / "locks" / f"{_SAFE.sub('_', spec.source_id)}.lock",
     )
