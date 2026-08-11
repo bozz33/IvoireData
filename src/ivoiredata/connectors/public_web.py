@@ -148,6 +148,13 @@ def public_document_resource(
     metadata_base: dict | None = None,
     upstream_state_path: Path | None = None,
 ):
+    """Crawl public documents incrementally with crash-safe HTTP validation.
+
+    `force` means "check now", not "download identical bytes again". ETag and
+    Last-Modified are used only when dlt state proves the cached signature was already
+    committed. Servers without validators are deduplicated by SHA-256 after the body is
+    received, preventing duplicate snapshots and Parquet rows.
+    """
     import dlt
     import requests
     from pypdf import PdfReader
@@ -169,6 +176,7 @@ def public_document_resource(
             except Exception:
                 pass
             print(f"[public_web] {source_id}: TLS désactivé (certificat serveur invalide)", flush=True)
+
         queue = deque([url])
         seen: set[str] = set()
         robots_cache: dict[str, RobotFileParser | None] = {}
@@ -188,19 +196,24 @@ def public_document_resource(
 
             artifact = f"url:{current}"
             cached = upstream.get(source_id, artifact) if upstream else {}
+            committed_digest = state.get(current)
             headers = {"User-Agent": user_agent}
-            if upstream:
+            # A cached ETag/Last-Modified is safe only after the corresponding digest
+            # survived a successful dlt commit. Otherwise a crash after download but
+            # before materialization could make the next request return a false 304.
+            if upstream and committed_digest and cached.get("signature") == committed_digest:
                 headers.update(upstream.conditional_headers(source_id, artifact))
             try:
                 response = session.get(current, timeout=120, headers=headers)
-                if response.status_code == 304:
+                if response.status_code == 304 and committed_digest:
                     fetched += 1
+                    cached_links = list(cached.get("cached_links") or [])
                     if upstream:
                         upstream.mark_http_unchanged(
                             source_id, artifact, url=current,
-                            extra={"cached_links": list(cached.get("cached_links") or [])},
+                            extra={"signature": committed_digest, "cached_links": cached_links},
                         )
-                    for candidate in list(cached.get("cached_links") or []):
+                    for candidate in cached_links:
                         if candidate not in seen:
                             queue.append(str(candidate))
                     continue
@@ -240,68 +253,66 @@ def public_document_resource(
             else:
                 continue
 
+            if committed_digest == digest:
+                cached_links = links or list(cached.get("cached_links") or [])
+                if upstream:
+                    upstream.mark_unchanged(
+                        source_id, artifact, signature=digest, url=response.url, reason="SHA256",
+                        etag=response.headers.get("etag"), last_modified=response.headers.get("last-modified"),
+                        extra={"cached_links": cached_links, "content_type": ctype or None},
+                    )
+                for candidate in cached_links:
+                    if candidate not in seen:
+                        queue.append(str(candidate))
+                continue
+
             text = clean_text(text)
             extraction_status = "NEEDS_OCR" if is_pdf and len(text) < _MIN_PDF_TEXT_CHARS else "TEXT_EXTRACTED"
-            # `force` means re-check now, not duplicate identical content. The network
-            # validator/SHA still decides whether this document version is new.
-            changed = state.get(current) != digest
-            snapshot = None
-            if changed:
-                snapshot = save_snapshot(
-                    snapshot_dir,
-                    source_id=source_id,
-                    url=current,
-                    content=raw,
-                    content_type=ctype or None,
+            snapshot = save_snapshot(snapshot_dir, source_id=source_id, url=current, content=raw, content_type=ctype or None)
+            needs_ocr_sidecar = None
+            if extraction_status == "NEEDS_OCR":
+                needs_ocr_sidecar = _write_needs_ocr(
+                    snapshot, source_id=source_id, source_url=current, sha256=digest, text_chars=len(text)
                 )
-                needs_ocr_sidecar = None
-                if extraction_status == "NEEDS_OCR":
-                    needs_ocr_sidecar = _write_needs_ocr(
-                        snapshot,
-                        source_id=source_id,
-                        source_url=current,
-                        sha256=digest,
-                        text_chars=len(text),
-                    )
-                classified = classify_from_base(base, current, text)
-                document_title = title_from_text(text)
-                for idx, chunk in enumerate(chunk_text(text)):
-                    chunk_id = hashlib.sha256(f"{source_id}|{current}|{digest}|{idx}".encode()).hexdigest()
-                    yield {
-                        "chunk_id": chunk_id,
-                        "source_id": source_id,
-                        "source_url": current,
-                        "document_title": document_title,
-                        "content_sha256": digest,
-                        "content_type": ctype or None,
-                        "local_snapshot": snapshot.get("local_path"),
-                        "chunk_index": idx,
-                        "metadata_only": metadata_only,
-                        "extraction_status": extraction_status,
-                        "needs_ocr_sidecar": needs_ocr_sidecar,
-                        "text": chunk,
-                        **classified,
-                    }
-                state[current] = digest
+            classified = classify_from_base(base, current, text)
+            document_title = title_from_text(text)
+            emitted = 0
+            for idx, chunk in enumerate(chunk_text(text)):
+                chunk_id = hashlib.sha256(f"{source_id}|{current}|{digest}|{idx}".encode()).hexdigest()
+                emitted += 1
+                yield {
+                    "chunk_id": chunk_id,
+                    "source_id": source_id,
+                    "source_url": current,
+                    "document_title": document_title,
+                    "content_sha256": digest,
+                    "content_type": ctype or None,
+                    "local_snapshot": snapshot.get("local_path"),
+                    "chunk_index": idx,
+                    "metadata_only": metadata_only,
+                    "extraction_status": extraction_status,
+                    "needs_ocr_sidecar": needs_ocr_sidecar,
+                    "text": chunk,
+                    **classified,
+                }
 
+            # dlt resource state is the materialization proof. If the process dies before
+            # commit, this value will not survive; the next run therefore cannot trust a
+            # network-only cached validator and will fetch/replay the body safely.
+            state[current] = digest
             if upstream:
-                previous_local = cached.get("local_path")
-                local_path = snapshot.get("local_path") if snapshot else previous_local
                 upstream.mark_downloaded(
                     source_id, artifact,
-                    url=current,
+                    url=response.url,
                     signature=digest,
                     sha256=digest,
                     size_bytes=len(raw),
                     etag=response.headers.get("etag"),
                     last_modified=response.headers.get("last-modified"),
                     method="HTTP_DOCUMENT",
-                    local_path=str(local_path) if local_path else None,
-                    extra={
-                        "cached_links": links,
-                        "content_type": ctype or None,
-                        "body_changed": changed,
-                    },
+                    rows=emitted,
+                    local_path=str(snapshot.get("local_path") or "") or None,
+                    extra={"cached_links": links, "content_type": ctype or None, "body_changed": True},
                 )
 
             for candidate in links:
