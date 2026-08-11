@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
+from ..snapshots import save_snapshot
 from ..upstream_state import UpstreamState
 
 _ADM_LEVELS = ("ADM0", "ADM1", "ADM2", "ADM3", "ADM4", "ADM5")
@@ -20,14 +21,26 @@ def _resolve_meta_urls(api_url: str) -> list[str]:
     return [api_url]
 
 
+def _json_from_path(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def geoboundaries_resource(
     *,
     api_url: str,
     source_id: str = "civ_geoboundaries",
     user_agent: str = "IvoireData/0.8.2",
+    snapshot_dir: Path | None = None,
     upstream_state_path: Path | None = None,
 ):
-    """Synchronize geoBoundaries using HTTP validators for metadata and GeoJSON."""
+    """Synchronize geoBoundaries without partial replacement loss.
+
+    `geoboundaries_metadata` and `geoboundaries_features` aggregate several ADM levels.
+    Therefore, when any one level changes, the connector rebuilds the *complete* affected
+    aggregate table: changed levels come from the network and unchanged levels are replayed
+    from content-addressed local GeoJSON snapshots. If nothing changed, no table is emitted
+    and the safe dlt pipeline keeps the existing tables untouched.
+    """
     import dlt
     import requests
 
@@ -39,7 +52,11 @@ def geoboundaries_resource(
         state = dlt.current.resource_state()
         metadata_signatures = state.setdefault("metadata_signatures_v082", {})
         boundary_signatures = state.setdefault("boundary_signatures_v082", {})
-        boundary_index = 0
+
+        metadata_rows: list[dict[str, Any]] = []
+        boundary_entries: list[dict[str, Any]] = []
+        metadata_changed_any = False
+        boundary_changed_any = False
 
         for meta_url in _resolve_meta_urls(api_url):
             level = meta_url.rstrip("/").rsplit("/", 1)[-1].upper()
@@ -49,13 +66,34 @@ def geoboundaries_resource(
             meta_response = session.get(meta_url, timeout=120, headers=headers)
             if meta_response.status_code == 404:
                 continue
+
+            meta_changed = False
             if meta_response.status_code == 304:
                 meta = cached_meta.get("metadata_payload")
-                if upstream:
-                    upstream.mark_http_unchanged(source_id, meta_artifact, url=meta_url)
                 if not isinstance(meta, (dict, list)):
-                    continue
-                rows = meta if isinstance(meta, list) else [meta]
+                    # A legacy cache may have validators without the payload needed for a
+                    # complete aggregate rebuild. Refetch once and seed the replay cache.
+                    meta_response = session.get(meta_url, timeout=120)
+                    meta_response.raise_for_status()
+                    meta = meta_response.json()
+                    digest = hashlib.sha256(meta_response.content).hexdigest()
+                    meta_changed = metadata_signatures.get(level) != digest
+                    metadata_signatures[level] = digest
+                    if upstream:
+                        upstream.mark_downloaded(
+                            source_id, meta_artifact, url=meta_response.url,
+                            signature=digest, sha256=digest, size_bytes=len(meta_response.content),
+                            etag=meta_response.headers.get("etag"),
+                            last_modified=meta_response.headers.get("last-modified"),
+                            method="HTTP_VALIDATORS+SHA256",
+                            extra={"metadata_payload": meta},
+                        )
+                else:
+                    if upstream:
+                        upstream.mark_http_unchanged(
+                            source_id, meta_artifact, url=meta_url,
+                            extra={"metadata_payload": meta},
+                        )
             else:
                 meta_response.raise_for_status()
                 ctype = meta_response.headers.get("content-type", "")
@@ -65,73 +103,125 @@ def geoboundaries_resource(
                     meta = meta_response.json()
                 except ValueError:
                     continue
-                rows = meta if isinstance(meta, list) else [meta]
                 digest = hashlib.sha256(meta_response.content).hexdigest()
-                metadata_changed = metadata_signatures.get(level) != digest
-                if metadata_changed:
-                    for row in rows:
-                        if isinstance(row, dict):
-                            metadata = dict(row)
-                            metadata["__ivoiredata_source_url"] = meta_url
-                            yield dlt.mark.with_table_name(metadata, "geoboundaries_metadata")
-                    metadata_signatures[level] = digest
+                meta_changed = metadata_signatures.get(level) != digest
+                metadata_signatures[level] = digest
                 if upstream:
                     upstream.mark_downloaded(
-                        source_id, meta_artifact, url=meta_response.url, signature=digest,
-                        sha256=digest, size_bytes=len(meta_response.content),
-                        etag=meta_response.headers.get("etag"), last_modified=meta_response.headers.get("last-modified"),
+                        source_id, meta_artifact, url=meta_response.url,
+                        signature=digest, sha256=digest, size_bytes=len(meta_response.content),
+                        etag=meta_response.headers.get("etag"),
+                        last_modified=meta_response.headers.get("last-modified"),
                         method="HTTP_VALIDATORS+SHA256",
                         extra={"metadata_payload": meta},
                     )
 
+            metadata_changed_any = metadata_changed_any or meta_changed
+            rows = meta if isinstance(meta, list) else [meta]
             for row in rows:
                 if not isinstance(row, dict):
                     continue
-                download_url = row.get("gjDownloadURL") or row.get("gjDownloadUrl") or row.get("geoJSON") or row.get("geojson")
+                metadata = dict(row)
+                metadata["__ivoiredata_source_url"] = meta_url
+                metadata["__ivoiredata_adm_level"] = level
+                metadata_rows.append(metadata)
+
+                download_url = (
+                    row.get("gjDownloadURL") or row.get("gjDownloadUrl")
+                    or row.get("geoJSON") or row.get("geojson")
+                )
                 if not isinstance(download_url, str) or not download_url:
                     continue
-                boundary_artifact = f"geojson:{level}:{boundary_index}"
-                headers = upstream.conditional_headers(source_id, boundary_artifact) if upstream else {}
-                response = session.get(download_url, timeout=180, headers=headers)
+
+                url_key = hashlib.sha256(download_url.encode("utf-8")).hexdigest()[:16]
+                boundary_artifact = f"geojson:{level}:{url_key}"
+                cached_boundary = upstream.get(source_id, boundary_artifact) if upstream else {}
+                cached_path = upstream.cached_path(source_id, boundary_artifact) if upstream else None
+                boundary_headers = upstream.conditional_headers(source_id, boundary_artifact) if upstream else {}
+                response = session.get(download_url, timeout=240, headers=boundary_headers)
+
+                changed = False
+                local_path: Path | None = cached_path
+                digest: str | None = str(cached_boundary.get("sha256") or "") or None
+
                 if response.status_code == 304:
+                    if local_path is None:
+                        # Validators without a replayable snapshot are not enough to rebuild
+                        # the combined table after another ADM level changes. Seed it once.
+                        response = session.get(download_url, timeout=240)
+                    else:
+                        if upstream:
+                            upstream.mark_http_unchanged(
+                                source_id, boundary_artifact, url=download_url,
+                                extra={"local_path": str(local_path)},
+                            )
+
+                if response.status_code != 304:
+                    response.raise_for_status()
+                    digest = hashlib.sha256(response.content).hexdigest()
+                    changed = boundary_signatures.get(boundary_artifact) != digest
+                    snapshot = save_snapshot(
+                        snapshot_dir,
+                        source_id=source_id,
+                        url=download_url,
+                        content=response.content,
+                        content_type=response.headers.get("content-type"),
+                        name=f"{level}-{url_key}.geojson",
+                    )
+                    value = snapshot.get("local_path")
+                    local_path = Path(str(value)) if value else None
+                    boundary_signatures[boundary_artifact] = digest
                     if upstream:
-                        upstream.mark_http_unchanged(source_id, boundary_artifact, url=download_url)
-                    boundary_index += 1
-                    continue
-                response.raise_for_status()
-                digest = hashlib.sha256(response.content).hexdigest()
-                if boundary_signatures.get(boundary_artifact) == digest:
-                    if upstream:
-                        upstream.mark_unchanged(
-                            source_id, boundary_artifact, signature=digest, url=download_url,
-                            etag=response.headers.get("etag"), last_modified=response.headers.get("last-modified"), reason="SHA256",
-                        )
-                    boundary_index += 1
-                    continue
-                payload: Any = response.json()
+                        if changed or not cached_boundary:
+                            upstream.mark_downloaded(
+                                source_id, boundary_artifact, url=download_url,
+                                signature=digest, sha256=digest, size_bytes=len(response.content),
+                                etag=response.headers.get("etag"),
+                                last_modified=response.headers.get("last-modified"),
+                                method="HTTP_VALIDATORS+SHA256",
+                                local_path=str(local_path) if local_path else None,
+                            )
+                        else:
+                            upstream.mark_unchanged(
+                                source_id, boundary_artifact, signature=digest, url=download_url,
+                                etag=response.headers.get("etag"),
+                                last_modified=response.headers.get("last-modified"),
+                                reason="SHA256",
+                                extra={"local_path": str(local_path) if local_path else None},
+                            )
+
+                if local_path is None or not local_path.exists():
+                    raise RuntimeError(f"geoBoundaries cache missing for {level}: {download_url}")
+                boundary_changed_any = boundary_changed_any or changed
+                boundary_entries.append({
+                    "level": level,
+                    "url": download_url,
+                    "artifact": boundary_artifact,
+                    "sha256": digest,
+                    "local_path": local_path,
+                })
+
+        if metadata_changed_any:
+            for row in metadata_rows:
+                yield dlt.mark.with_table_name(row, "geoboundaries_metadata")
+
+        if boundary_changed_any:
+            for boundary_index, entry in enumerate(boundary_entries):
+                payload = _json_from_path(entry["local_path"])
                 features = payload.get("features", []) if isinstance(payload, dict) else []
                 for feature_index, feature in enumerate(features):
                     if not isinstance(feature, dict):
                         continue
-                    item = {
+                    yield dlt.mark.with_table_name({
                         "feature_index": feature_index,
                         "feature_id": feature.get("id"),
                         "properties": feature.get("properties") or {},
                         "geometry": feature.get("geometry"),
-                        "__ivoiredata_source_url": download_url,
-                        "__ivoiredata_raw_sha256": digest,
+                        "__ivoiredata_source_url": entry["url"],
+                        "__ivoiredata_raw_sha256": entry["sha256"],
+                        "__ivoiredata_raw_path": str(entry["local_path"]),
                         "__ivoiredata_boundary_index": boundary_index,
-                        "__ivoiredata_adm_level": level,
-                    }
-                    yield dlt.mark.with_table_name(item, "geoboundaries_features")
-                boundary_signatures[boundary_artifact] = digest
-                if upstream:
-                    upstream.mark_downloaded(
-                        source_id, boundary_artifact, url=download_url, signature=digest,
-                        sha256=digest, size_bytes=len(response.content), etag=response.headers.get("etag"),
-                        last_modified=response.headers.get("last-modified"), method="HTTP_VALIDATORS+SHA256",
-                        rows=len(features),
-                    )
-                boundary_index += 1
+                        "__ivoiredata_adm_level": entry["level"],
+                    }, "geoboundaries_features")
 
     return resource()
