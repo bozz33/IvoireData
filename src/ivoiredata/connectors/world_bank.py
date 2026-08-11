@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from itertools import islice
 from pathlib import Path
 from typing import Any, Iterable
 
 from ..metadata import classify_from_base
 from ..snapshots import save_snapshot
-from ..state_io import atomic_write_json
+from ..state_io import atomic_write_json, load_json
 from ..upstream_state import UpstreamState
 
 API = "https://api.worldbank.org/v2"
@@ -29,6 +30,57 @@ def _data_rows(payload: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         rows = payload[1] if isinstance(payload[1], list) else []
         return meta, [row for row in rows if isinstance(row, dict)]
     return {}, []
+
+
+def _parse_time(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _v081_wdi_adoptable(snapshot_dir: Path | None, *, country: str, lastupdated: Any) -> tuple[bool, str | None]:
+    """Prove an existing v0.8.1 WDI table is at least as fresh as the official release.
+
+    Adoption is intentionally conservative: a successful manifest, an existing business
+    table, and a country-indicator raw snapshot retrieved on/after World Bank's current
+    `lastupdated` are all mandatory. The newly fetched `/sources/{id}` metadata snapshot
+    is excluded, so it cannot make an old table look fresh.
+    """
+    if snapshot_dir is None or not snapshot_dir.exists():
+        return False, None
+    official = _parse_time(lastupdated)
+    if official is None:
+        return False, None
+    source_root = snapshot_dir.parent
+    manifest = load_json(source_root / "manifest.json", {})
+    if not isinstance(manifest, dict) or str(manifest.get("status") or "").lower() != "success":
+        return False, None
+    table_root = source_root / "tables" / "data" / "worldbank_wdi"
+    if not table_root.exists() or not any(table_root.rglob("*.parquet")):
+        return False, None
+
+    latest: datetime | None = None
+    latest_text: str | None = None
+    marker = f"/country/{country}/indicator/"
+    for sidecar in snapshot_dir.rglob("*.meta.json"):
+        meta = load_json(sidecar, {})
+        if not isinstance(meta, dict):
+            continue
+        source_url = str(meta.get("source_url") or "")
+        if marker not in source_url:
+            continue
+        retrieved = _parse_time(meta.get("retrieved_at"))
+        if retrieved is not None and (latest is None or retrieved > latest):
+            latest = retrieved
+            latest_text = str(meta.get("retrieved_at"))
+    return bool(latest is not None and latest >= official), latest_text
 
 
 def _paged(session, url: str, params: dict[str, Any], *, snapshot_dir: Path | None = None,
@@ -163,23 +215,49 @@ def world_bank_wdi_resource(
         upstream = UpstreamState(upstream_state_path) if upstream_state_path else None
         signature, source_meta, source_meta_url = _source_version(session, source, snapshot_dir)
         prior_signature = loaded.get("source_signature")
+        lastupdated = source_meta.get("lastupdated") or source_meta.get("lastUpdated")
+        adopted_v081 = False
+        adopted_snapshot_at = None
+
+        if not prior_signature:
+            adopted_v081, adopted_snapshot_at = _v081_wdi_adoptable(
+                snapshot_dir, country=country, lastupdated=lastupdated
+            )
+            if adopted_v081:
+                loaded["source_signature"] = signature
+                prior_signature = signature
+                if upstream:
+                    upstream.mark_downloaded(
+                        "civ_worldbank_wdi", f"source:{source}",
+                        url=source_meta_url, signature=signature, sha256=None, size_bytes=None,
+                        method="ADOPTED_V081_FRESHNESS", rows=None,
+                        extra={"lastupdated": lastupdated, "legacy_snapshot_at": adopted_snapshot_at},
+                    )
 
         stats: dict[str, Any] = {
             "country": country,
             "source": source,
-            "source_lastupdated": source_meta.get("lastupdated") or source_meta.get("lastUpdated"),
+            "source_lastupdated": lastupdated,
             "unchanged": prior_signature == signature,
+            "adopted_v081": adopted_v081,
+            "adopted_legacy_snapshot_at": adopted_snapshot_at,
             "indicators": 0,
             "business_rows": 0,
             "ignored_http400_indicators": [],
         }
 
         if prior_signature == signature:
-            if upstream:
-                upstream.mark_unchanged("civ_worldbank_wdi", f"source:{source}", signature=signature, url=source_meta_url, reason="WORLD_BANK_LASTUPDATED")
+            if upstream and not adopted_v081:
+                upstream.mark_unchanged(
+                    "civ_worldbank_wdi", f"source:{source}", signature=signature,
+                    url=source_meta_url, reason="WORLD_BANK_LASTUPDATED",
+                )
             if snapshot_dir:
                 atomic_write_json(snapshot_dir / "worldbank_wdi_sync_stats.json", stats)
-            yield dlt.mark.with_table_name({"run_stats_json": json.dumps(stats, ensure_ascii=False), **stats}, "worldbank_wdi_sync_stats")
+            yield dlt.mark.with_table_name(
+                {"run_stats_json": json.dumps(stats, ensure_ascii=False), **stats},
+                "worldbank_wdi_sync_stats",
+            )
             return
 
         indicators = _paged(
