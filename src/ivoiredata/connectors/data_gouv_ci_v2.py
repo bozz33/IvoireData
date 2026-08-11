@@ -5,6 +5,8 @@ import hashlib
 import io
 import json
 import re
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote, unquote, urljoin, urlparse
@@ -110,13 +112,22 @@ def _request_json(session, url: str, *, params: dict[str, Any] | None = None, ti
 
 
 def _discover_official(session, page_size: int = 1000) -> list[dict[str, Any]]:
-    """List anonymous-visible datasets using Data Fair's documented page>=1 contract."""
+    """List every anonymous-visible Data Fair dataset, even when server size is capped.
+
+    Data Fair's catalogue is page based. Some deployments cap the effective page size
+    below the requested `size`, so `len(batch) < requested_size` is *not* sufficient to
+    declare end-of-catalogue when the response publishes a larger total count.
+    """
+    requested = max(1, min(int(page_size), 10000))
     collected: list[dict[str, Any]] = []
     seen: set[str] = set()
     page = 1
     while True:
-        _, payload = _request_json(session, f"{API}/datasets", params={"size": page_size, "page": page})
+        _, payload = _request_json(session, f"{API}/datasets", params={"size": requested, "page": page})
         batch = _items(payload)
+        if not batch:
+            break
+        before = len(seen)
         for meta in batch:
             dsid = _dataset_id(meta)
             identity = dsid or hashlib.sha256(json.dumps(meta, sort_keys=True, default=str).encode()).hexdigest()
@@ -124,9 +135,17 @@ def _discover_official(session, page_size: int = 1000) -> list[dict[str, Any]]:
                 seen.add(identity)
                 collected.append(meta)
         count = payload.get("count") if isinstance(payload, dict) else None
-        if not batch or len(batch) < page_size:
-            break
-        if isinstance(count, (int, float)) and len(collected) >= int(count):
+        if isinstance(count, (int, float)):
+            if len(collected) >= int(count):
+                break
+            # A non-empty page that adds no identity before the advertised count means
+            # the server is repeating a page/cursor; fail loudly instead of looping.
+            if len(seen) == before:
+                raise RuntimeError(
+                    f"Data Fair /datasets pagination stalled at page={page}: "
+                    f"collected={len(collected)} advertised_count={int(count)}"
+                )
+        elif len(batch) < requested:
             break
         page += 1
         if page > 10000:
@@ -204,13 +223,41 @@ def _cached_rows(upstream: UpstreamState, source_id: str, artifact: str, signatu
     return rows, state
 
 
+def _archive_removed_tables(snapshot_dir: Path | None, dataset_ids: list[str]) -> list[dict[str, str]]:
+    """Archive tables of datasets no longer visible publicly; never delete history."""
+    if snapshot_dir is None or not dataset_ids:
+        return []
+    tables_root = snapshot_dir.parent / "tables" / "data"
+    if not tables_root.exists():
+        return []
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive_root = snapshot_dir / "legacy" / "removed_upstream" / stamp
+    archived: list[dict[str, str]] = []
+    for dsid in sorted(set(dataset_ids)):
+        table = _safe_table(dsid)
+        source = tables_root / table
+        if not source.exists():
+            continue
+        archive_root.mkdir(parents=True, exist_ok=True)
+        target = archive_root / table
+        suffix = 1
+        while target.exists():
+            target = archive_root / f"{table}-{suffix}"
+            suffix += 1
+        shutil.move(str(source), str(target))
+        archived.append({"dataset_id": dsid, "table": table, "archive_path": str(target)})
+    if archived:
+        atomic_write_json(archive_root / "archive.json", {"archived_at": stamp, "datasets": archived})
+    return archived
+
+
 def data_gouv_ci_resource_v2(
     *,
     source_id: str = "civ_datagouv_catalog",
     dataset_ids: list[str] | None = None,
     limit: int | None = None,
     force: bool = False,
-    user_agent: str = "IvoireData/0.8.2",
+    user_agent: str = "IvoireData/0.8.3",
     snapshot_dir: Path | None = None,
     metadata_base: dict[str, Any] | None = None,
     upstream_state_path: Path | None = None,
@@ -256,6 +303,7 @@ def data_gouv_ci_resource_v2(
             "selected": len(selected),
             "unchanged": 0,
             "adopted_v081_signature": 0,
+            "reappeared": 0,
             "replayed_from_local_cache": 0,
             "downloaded": 0,
             "via_full": 0,
@@ -263,28 +311,40 @@ def data_gouv_ci_resource_v2(
             "empty": 0,
             "failed": 0,
             "removed_upstream": 0,
+            "removed_upstream_ids": [],
+            "archived_removed_tables": [],
             "business_rows_changed": 0,
             "failures": [],
-            "pagination": "Data Fair page>=1 for catalog; follow /lines next cursor until absent",
+            "pagination": "Data Fair page>=1 until advertised count is reached; /lines follows next cursor until absent",
             "force_semantics": "force checks now; unchanged dataset versions are not downloaded again",
         }
 
         if upstream:
+            previous_rows = upstream.source_rows(source_id)
             previous = {
                 str(row.get("artifact_id", ""))[8:]
-                for row in upstream.source_rows(source_id)
+                for row in previous_rows
                 if str(row.get("artifact_id", "")).startswith("dataset:") and row.get("downloaded")
             }
-            for removed in sorted(previous - catalog_ids):
+            removed_ids = sorted(previous - catalog_ids)
+            for removed in removed_ids:
                 upstream.mark_removed(source_id, f"dataset:{removed}")
-                stats["removed_upstream"] += 1
+            stats["removed_upstream"] = len(removed_ids)
+            stats["removed_upstream_ids"] = removed_ids
+            stats["archived_removed_tables"] = _archive_removed_tables(snapshot_dir, removed_ids)
 
         for meta in selected:
             dsid = _dataset_id(meta)
             assert dsid is not None
             signature = _signature(meta)
-            loaded = loaded_signatures.get(dsid)
             artifact = f"dataset:{dsid}"
+            cached_state = upstream.get(source_id, artifact) if upstream else {}
+            if cached_state.get("removed"):
+                # Dataset returned to the public catalogue. Its old table may have been
+                # archived, so clear dlt's materialized signature and rebuild/replay it.
+                loaded_signatures.pop(dsid, None)
+                stats["reappeared"] += 1
+            loaded = loaded_signatures.get(dsid)
 
             if loaded == signature:
                 stats["unchanged"] += 1

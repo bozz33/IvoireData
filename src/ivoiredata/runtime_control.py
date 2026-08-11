@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, TYPE_CHECKING, Iterable
 
+from .locks import file_lock
 from .state_io import atomic_write_json, load_json
 
 if TYPE_CHECKING:
@@ -45,11 +46,14 @@ class RuntimeControl:
 
     Versioned config files are immutable defaults. User changes live in
     `runtime_overrides.json`, shared by API, scheduler and one-shot containers.
+    Read-modify-write mutations are protected by a shared file lock so two API
+    requests cannot silently overwrite each other.
     """
 
     def __init__(self, settings: Settings):
         self.settings = settings
         self.path = settings.runtime_overrides_path
+        self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
 
     @property
     def overlay_paths(self) -> list[Path]:
@@ -83,34 +87,45 @@ class RuntimeControl:
         automatic_enabled: bool | None = None,
         scheduler_interval_seconds: int | None = None,
     ) -> dict[str, Any]:
-        data = self.overrides()
-        updates = data.setdefault("updates", {})
-        if automatic_enabled is not None:
-            updates["automatic_enabled"] = bool(automatic_enabled)
-        if scheduler_interval_seconds is not None:
-            interval = int(scheduler_interval_seconds)
-            if interval < 300:
-                raise ValueError("scheduler_interval_seconds must be >= 300")
-            updates["scheduler_interval_seconds"] = interval
-        self._write(data)
+        with file_lock(self.lock_path, timeout=60):
+            data = self.overrides()
+            updates = data.setdefault("updates", {})
+            if not isinstance(updates, dict):
+                updates = {}
+                data["updates"] = updates
+            if automatic_enabled is not None:
+                updates["automatic_enabled"] = bool(automatic_enabled)
+            if scheduler_interval_seconds is not None:
+                interval = int(scheduler_interval_seconds)
+                if interval < 300:
+                    raise ValueError("scheduler_interval_seconds must be >= 300")
+                updates["scheduler_interval_seconds"] = interval
+            self._write(data)
         return self.merged().get("updates", {})
 
     def set_source(self, source_id: str, **changes: Any) -> dict[str, Any]:
-        data = self.overrides()
-        sources = data.setdefault("sources", {})
-        entry = sources.setdefault(source_id, {})
-        for key in ("enabled", "auto_sync", "refresh_hours"):
-            if key not in changes or changes[key] is None:
-                continue
-            value = changes[key]
-            if key == "refresh_hours":
-                value = int(value)
-                if value < 1:
-                    raise ValueError("refresh_hours must be >= 1")
-            elif key in {"enabled", "auto_sync"}:
-                value = bool(value)
-            entry[key] = value
-        self._write(data)
+        with file_lock(self.lock_path, timeout=60):
+            data = self.overrides()
+            sources = data.setdefault("sources", {})
+            if not isinstance(sources, dict):
+                sources = {}
+                data["sources"] = sources
+            entry = sources.setdefault(source_id, {})
+            if not isinstance(entry, dict):
+                entry = {}
+                sources[source_id] = entry
+            for key in ("enabled", "auto_sync", "refresh_hours"):
+                if key not in changes or changes[key] is None:
+                    continue
+                value = changes[key]
+                if key == "refresh_hours":
+                    value = int(value)
+                    if value < 1:
+                        raise ValueError("refresh_hours must be >= 1")
+                elif key in {"enabled", "auto_sync"}:
+                    value = bool(value)
+                entry[key] = value
+            self._write(data)
         return self.merged().get("sources", {}).get(source_id, {})
 
     def source_status(self, registry: SourceRegistry, source_id: str) -> dict[str, Any]:

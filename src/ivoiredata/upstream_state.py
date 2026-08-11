@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .locks import file_lock
 from .state_io import atomic_write_json, load_json
 
 
@@ -12,22 +13,37 @@ def _now() -> str:
 
 
 class UpstreamState:
-    """Persistent cache metadata used to avoid transferring unchanged upstream data."""
+    """Persistent cache metadata used to avoid transferring unchanged upstream data.
+
+    API, scheduler and one-shot containers share this file. Every mutation therefore
+    locks, reloads the newest disk state, applies one change and atomically replaces the
+    file. This prevents two concurrent sources from losing each other's cache records.
+    """
 
     def __init__(self, path: Path):
         self.path = path
-        payload = load_json(path, {"schema_version": 1, "resources": {}})
+        self.lock_path = path.with_suffix(path.suffix + ".lock")
+        self.data: dict[str, Any] = self._load()
+
+    def _load(self) -> dict[str, Any]:
+        payload = load_json(self.path, {"schema_version": 1, "resources": {}})
         if not isinstance(payload, dict):
             payload = {"schema_version": 1, "resources": {}}
         payload.setdefault("schema_version", 1)
-        payload.setdefault("resources", {})
-        self.data: dict[str, Any] = payload
+        resources = payload.setdefault("resources", {})
+        if not isinstance(resources, dict):
+            payload["resources"] = {}
+        return payload
+
+    def _refresh(self) -> None:
+        self.data = self._load()
 
     @staticmethod
     def key(source_id: str, artifact_id: str) -> str:
         return f"{source_id}::{artifact_id}"
 
     def get(self, source_id: str, artifact_id: str) -> dict[str, Any]:
+        self._refresh()
         row = self.data["resources"].get(self.key(source_id, artifact_id), {})
         return dict(row) if isinstance(row, dict) else {}
 
@@ -57,13 +73,18 @@ class UpstreamState:
         return path if path.exists() else None
 
     def _update(self, source_id: str, artifact_id: str, **values: Any) -> dict[str, Any]:
-        key = self.key(source_id, artifact_id)
-        row = self.data["resources"].setdefault(key, {})
-        row.update(values)
-        row["source_id"] = source_id
-        row["artifact_id"] = artifact_id
-        atomic_write_json(self.path, self.data)
-        return dict(row)
+        with file_lock(self.lock_path, timeout=60):
+            self.data = self._load()
+            key = self.key(source_id, artifact_id)
+            row = self.data["resources"].setdefault(key, {})
+            if not isinstance(row, dict):
+                row = {}
+                self.data["resources"][key] = row
+            row.update(values)
+            row["source_id"] = source_id
+            row["artifact_id"] = artifact_id
+            atomic_write_json(self.path, self.data)
+            return dict(row)
 
     def mark_unchanged(self, source_id: str, artifact_id: str, *, signature: str | None = None,
                        url: str | None = None, reason: str = "signature", etag: str | None = None,
@@ -72,8 +93,13 @@ class UpstreamState:
             "last_checked": _now(),
             "last_result": "UNCHANGED",
             "unchanged_reason": reason,
+            # UNCHANGED is evidence that a previous version is already materialized or
+            # cached locally. This also lets migration-adopted datasets participate in
+            # future removed-upstream reconciliation.
+            "downloaded": True,
             "removed": False,
             "error": None,
+            "http_status": None,
         }
         if signature is not None:
             values["signature"] = signature
@@ -109,6 +135,7 @@ class UpstreamState:
             last_downloaded=now,
             last_result="DOWNLOADED",
             error=None,
+            http_status=None,
         )
         if extra:
             values.update(extra)
@@ -134,10 +161,13 @@ class UpstreamState:
         return self._update(
             source_id, artifact_id,
             removed=True,
+            error=None,
+            http_status=None,
             last_checked=_now(),
             last_result="REMOVED_UPSTREAM",
         )
 
     def source_rows(self, source_id: str) -> list[dict[str, Any]]:
+        self._refresh()
         prefix = f"{source_id}::"
         return [dict(v) for k, v in self.data["resources"].items() if k.startswith(prefix) and isinstance(v, dict)]

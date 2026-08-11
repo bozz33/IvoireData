@@ -5,8 +5,10 @@
 ### Correctness
 
 - Data.gouv.ci is now synchronized through the actual Data Fair contract: anonymous public catalogue with `page>=1`, `/full` bulk transfer when available, then official `/lines` fallback following the returned `next` cursor until absent.
+- Data Fair catalogue pagination no longer assumes that the server honors the requested page size; the advertised total count is followed until reached and repeated/stalled pages fail loudly instead of silently truncating coverage.
 - Data.gouv failures are no longer silently collapsed into “dataset ignored”; sync statistics record catalogue size, downloaded/unchanged datasets, `/full` vs `/lines`, removals and exact failures.
-- ILOSTAT no longer treats `/data/indicator?ref_area=CIV` as country-wide data. It loads the official indicator TOC and requests every new/updated indicator with both `id=<indicator>` and `ref_area=CIV` in CSV format.
+- Datasets removed from the anonymous public Data.gouv catalogue are marked `REMOVED_UPSTREAM`; their old Parquet tables are archived under `raw/legacy/removed_upstream/` rather than deleted. Pre-v0.8.2 orphan tables are also archived non-destructively after a successful migration run.
+- ILOSTAT no longer treats `/data/indicator?ref_area=CIV` as country-wide data. It uses the official `REF_AREA` table of contents as the country-level change gate, then loads the official indicator TOC and requests every new/updated indicator with both `id=<indicator>` and `ref_area=CIV` in CSV format only when Côte d'Ivoire has changed.
 - The unsafe RDS path remains disabled.
 - FAOSTAT no longer freezes collection to five domains. It reads the official `datasets_E.json` bulk catalogue, discovers current domains and excludes discontinued archives by default.
 
@@ -16,6 +18,7 @@
 - Version priority: official release/version metadata → ETag/Last-Modified/304 → SHA-256 fallback.
 - `--force` now means “check now”; identical already-materialized versions are not intentionally downloaded again.
 - Crash-safe replay: if a payload was downloaded but dlt did not commit the load, the next run can replay the local snapshot without another body transfer.
+- ILOSTAT compares the small official `REF_AREA` entries for `CIV_A`, `CIV_Q`, `CIV_M` (as available). If their `last.update`/metadata signature is unchanged, the expensive indicator TOC/data sweep is skipped entirely.
 - FAOSTAT uses official `DateUpdate/FileRows/FileSize/FileLocation` signatures and a bounded per-run transfer budget.
 - World Bank WDI uses official source `lastupdated` metadata before expensive indicator/data requests.
 - World Bank Projects, UIS, geoBoundaries and direct HTTP files use conditional HTTP where available and hashes otherwise.
@@ -24,10 +27,14 @@
 
 ### Robustness
 
-- Freshness, runtime overrides, qualification state, upstream state and snapshot sidecars use atomic JSON writes.
+- Freshness, runtime overrides, qualification state, upstream state, manifests, catalogue and snapshot sidecars use atomic JSON writes.
+- Shared mutable state is protected by cross-process locks so API, scheduler and one-shot containers cannot lose each other's updates.
+- A per-source lock prevents the same dlt source from running concurrently in multiple containers; different sources remain independent.
+- `catalog.json` has a global lock plus atomic replacement, preventing concurrent source completions from producing a partial/corrupt catalogue.
 - Malformed JSON state is quarantined as `*.corrupt-<timestamp>` rather than preventing engine startup.
 - ILOSTAT requests retry 429/5xx/timeouts with bounded exponential backoff.
 - FAOSTAT enforces per-file and per-run transfer budgets; backlog is explicit and resumable.
+- Incremental structured connectors protect existing dynamic tables when an unchanged table is omitted from a run.
 
 ### Audit / CI Gold
 

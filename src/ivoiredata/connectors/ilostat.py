@@ -14,6 +14,7 @@ from ..state_io import atomic_write_json
 from ..upstream_state import UpstreamState
 
 TOC_API = "https://rplumber.ilo.org/metadata/toc/indicator/"
+REF_AREA_TOC_API = "https://rplumber.ilo.org/metadata/toc/ref_area/"
 DATA_API = "https://rplumber.ilo.org/data/indicator/"
 CSV_BASE = DATA_API
 
@@ -60,6 +61,32 @@ def _signature(row: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(compact, sort_keys=True, default=str, ensure_ascii=False).encode()).hexdigest()
 
 
+def _ref_area_signature(rows: list[dict[str, Any]]) -> str:
+    compact = [
+        {
+            key: row.get(key)
+            for key in ("id", "ref_area", "freq", "size", "data.start", "data.end", "last.update", "n.records")
+        }
+        for row in sorted(rows, key=lambda item: str(item.get("id") or ""))
+    ]
+    return hashlib.sha256(json.dumps(compact, sort_keys=True, default=str, ensure_ascii=False).encode()).hexdigest()
+
+
+def _country_ref_rows(rows: list[dict[str, Any]], country: str, wanted_freqs: set[str]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    prefix = country.upper() + "_"
+    for row in rows:
+        ref_area = str(row.get("ref_area") or "").upper()
+        rid = str(row.get("id") or "").upper()
+        freq = str(row.get("freq") or (rid.rsplit("_", 1)[-1] if "_" in rid else "")).upper()
+        if ref_area != country.upper() and not rid.startswith(prefix):
+            continue
+        if wanted_freqs and freq not in wanted_freqs:
+            continue
+        out.append(row)
+    return out
+
+
 def _table_name(indicator_id: str) -> str:
     return "ilostat_" + re.sub(r"[^a-zA-Z0-9]+", "_", indicator_id).strip("_").lower()[:100]
 
@@ -94,16 +121,24 @@ def _get_retry(session, url: str, *, params: dict[str, Any] | None = None,
     raise RuntimeError(f"ILOSTAT request failed: {url}")
 
 
-def _fetch_toc(session, *, timeout: int = 120) -> tuple[Any, list[dict[str, Any]]]:
-    response = _get_retry(session, TOC_API, params={"lang": "en"}, timeout=timeout, headers={"Accept": "application/json"})
+def _fetch_toc_url(session, url: str, *, timeout: int = 120) -> tuple[Any, list[dict[str, Any]]]:
+    response = _get_retry(session, url, params={"lang": "en"}, timeout=timeout, headers={"Accept": "application/json"})
     try:
         payload = response.json()
     except ValueError as exc:
-        raise RuntimeError("ILOSTAT indicator TOC did not return JSON") from exc
+        raise RuntimeError(f"ILOSTAT TOC did not return JSON: {url}") from exc
     rows = _toc_rows(payload)
     if not rows:
-        raise RuntimeError("ILOSTAT indicator TOC returned zero rows")
+        raise RuntimeError(f"ILOSTAT TOC returned zero rows: {url}")
     return response, rows
+
+
+def _fetch_toc(session, *, timeout: int = 120) -> tuple[Any, list[dict[str, Any]]]:
+    return _fetch_toc_url(session, TOC_API, timeout=timeout)
+
+
+def _fetch_ref_area_toc(session, *, timeout: int = 120) -> tuple[Any, list[dict[str, Any]]]:
+    return _fetch_toc_url(session, REF_AREA_TOC_API, timeout=timeout)
 
 
 def _fetch_indicator(session, indicator_id: str, country: str, *, data_api: str = DATA_API, timeout: int = 240):
@@ -131,18 +166,22 @@ def ilostat_ref_area_resource(
     country: str = "CIV",
     frequencies: Iterable[str] = (),
     base_url: str = DATA_API,
-    user_agent: str = "IvoireData/0.8.2",
+    user_agent: str = "IvoireData/0.8.3",
     snapshot_dir: Path | None = None,
     upstream_state_path: Path | None = None,
     request_pause_seconds: float = 0.05,
 ):
-    """Load broad ILOSTAT CIV coverage through the official indicator TOC + CSV API.
+    """Synchronize broad ILOSTAT country coverage from official metadata + safe CSV REST.
 
-    The legacy implementation called /data/indicator with only ref_area=CIV and therefore
-    materialized a small subset (218 rows in the observed deployment). v0.8.2 reads the
-    official indicator table of contents, uses its `last.update` metadata as a version
-    signature, and queries every new/updated indicator for CIV. RDS is intentionally not
-    used because the previous in-process RDS parser caused native crashes.
+    ILOSTAT officially exposes data both by indicator and by ref_area. The tiny ref_area
+    TOC is checked first and its CIV A/Q/M rows form a country-wide version signature.
+    If that signature is unchanged, no indicator TOC/data request is made. When CIV has
+    changed, the indicator TOC identifies new/updated indicators and their CSV data is
+    requested with both `id=<indicator>` and `ref_area=CIV`.
+
+    The official bulk ref_area RDS files are intentionally not parsed in-process because
+    that path previously caused native SIGSEGV failures. We use their official TOC as the
+    cheap change gate and the official CSV endpoint as the safe materialization path.
     """
     import dlt
     import requests
@@ -154,8 +193,51 @@ def ilostat_ref_area_resource(
     def resource():
         session = requests.Session()
         session.headers.update({"User-Agent": user_agent})
-        loaded_signatures = dlt.current.resource_state().setdefault("indicator_signatures", {})
+        dlt_state = dlt.current.resource_state()
+        loaded_signatures = dlt_state.setdefault("indicator_signatures", {})
         upstream = UpstreamState(upstream_state_path) if upstream_state_path else None
+
+        ref_response, ref_toc = _fetch_ref_area_toc(session)
+        country_ref = _country_ref_rows(ref_toc, country, wanted_freqs)
+        if not country_ref:
+            raise RuntimeError(f"ILOSTAT ref_area TOC has no entries for {country}")
+        country_signature = _ref_area_signature(country_ref)
+        ref_snapshot = save_snapshot(
+            snapshot_dir, source_id="civ_ilostat", url=ref_response.url,
+            content=ref_response.content, content_type=ref_response.headers.get("content-type"),
+            name="ilostat-ref-area-toc.json",
+        )
+
+        prior_country_signature = dlt_state.get("country_ref_area_signature_v083")
+        if prior_country_signature == country_signature:
+            stats = {
+                "country": country,
+                "ref_area_toc_files": len(country_ref),
+                "ref_area_ids": sorted(str(row.get("id") or "") for row in country_ref),
+                "ref_area_signature": country_signature,
+                "ref_area_unchanged_gate": True,
+                "indicator_toc_requested": False,
+                "selected_indicators": 0,
+                "unchanged": 0,
+                "network_queries": 0,
+                "replayed_from_local_cache": 0,
+                "with_country_rows": 0,
+                "without_country_rows": 0,
+                "failed": 0,
+                "business_rows": 0,
+                "failures": [],
+                "data_api": base_url,
+            }
+            if upstream:
+                upstream.mark_unchanged(
+                    "civ_ilostat", "ref_area:CIV", signature=country_signature,
+                    url=ref_response.url, reason="ILOSTAT_REF_AREA_LAST_UPDATE",
+                    extra={"ref_area_ids": stats["ref_area_ids"]},
+                )
+            if snapshot_dir:
+                atomic_write_json(snapshot_dir / "ilostat_sync_stats.json", stats)
+            yield dlt.mark.with_table_name({"run_stats_json": json.dumps(stats, ensure_ascii=False), **stats}, "ilostat_sync_stats")
+            return
 
         toc_response, toc = _fetch_toc(session)
         toc_snapshot = save_snapshot(
@@ -179,6 +261,11 @@ def ilostat_ref_area_resource(
 
         stats: dict[str, Any] = {
             "country": country,
+            "ref_area_toc_files": len(country_ref),
+            "ref_area_ids": sorted(str(row.get("id") or "") for row in country_ref),
+            "ref_area_signature": country_signature,
+            "ref_area_unchanged_gate": False,
+            "indicator_toc_requested": True,
             "toc_indicators": len(toc),
             "selected_indicators": len(candidates),
             "unchanged": 0,
@@ -189,6 +276,7 @@ def ilostat_ref_area_resource(
             "failed": 0,
             "business_rows": 0,
             "failures": [],
+            "ref_toc_sha256": ref_snapshot.get("sha256"),
             "toc_sha256": toc_snapshot.get("sha256"),
             "data_api": base_url,
         }
@@ -273,6 +361,20 @@ def ilostat_ref_area_resource(
 
         if stats["failed"] and stats["with_country_rows"] == 0 and stats["unchanged"] == 0:
             raise RuntimeError(f"ILOSTAT failed for all changed indicators: {stats['failures'][:3]}")
+
+        # Only certify the country-wide version once the changed indicator sweep completed
+        # without partial failures. A failed indicator therefore forces a retry next run.
+        if stats["failed"] == 0:
+            dlt_state["country_ref_area_signature_v083"] = country_signature
+            if upstream:
+                upstream.mark_downloaded(
+                    "civ_ilostat", "ref_area:CIV", url=ref_response.url,
+                    signature=country_signature, sha256=str(ref_snapshot.get("sha256") or "") or None,
+                    size_bytes=int(ref_snapshot.get("size_bytes") or 0), method="ILOSTAT_REF_AREA_TOC",
+                    rows=sum(int(row.get("n.records") or 0) for row in country_ref if str(row.get("n.records") or "").isdigit()),
+                    local_path=str(ref_snapshot.get("local_path") or "") or None,
+                    extra={"ref_area_ids": stats["ref_area_ids"]},
+                )
         if snapshot_dir:
             atomic_write_json(snapshot_dir / "ilostat_sync_stats.json", stats)
         yield dlt.mark.with_table_name({"run_stats_json": json.dumps(stats, ensure_ascii=False), **stats}, "ilostat_sync_stats")

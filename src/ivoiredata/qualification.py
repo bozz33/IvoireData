@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from .locks import file_lock
 from .models import SyncResult
 from .state_io import atomic_write_json, load_json
 
@@ -22,26 +23,25 @@ def _parse(value: str | None) -> datetime | None:
 
 
 class QualificationStore:
-    """Persistent CI Gold stability qualification ledger.
-
-    Automatic scheduler cycles are the only cycles that count toward the
-    14-day stability window. A clean preflight/full-sync may be snapshotted as
-    a baseline so long refresh intervals do not make a 14-day qualification
-    mathematically impossible.
-    """
+    """Persistent CI Gold stability qualification ledger, safe across containers."""
 
     def __init__(self, path: Path):
         self.path = path
-        payload = load_json(path, {})
-        self.data = payload if isinstance(payload, dict) else {}
+        self.lock_path = path.with_suffix(path.suffix + ".lock")
+        self.data = self._load()
+
+    def _load(self) -> dict:
+        payload = load_json(self.path, {})
+        return payload if isinstance(payload, dict) else {}
 
     def _save(self) -> None:
         atomic_write_json(self.path, self.data)
 
-    def start(self, baseline_sources: Iterable[str] | None = None) -> dict:
+    @staticmethod
+    def _new_state(baseline_sources: Iterable[str] | None = None) -> dict:
         now = _now()
         baseline = sorted({str(source_id) for source_id in (baseline_sources or []) if source_id})
-        self.data = {
+        return {
             "started_at": now,
             "baseline_at": now,
             "baseline_sources": baseline,
@@ -55,35 +55,42 @@ class QualificationStore:
             "source_errors": {},
             "last_errors": [],
         }
-        self._save()
+
+    def start(self, baseline_sources: Iterable[str] | None = None) -> dict:
+        with file_lock(self.lock_path, timeout=60):
+            self.data = self._new_state(baseline_sources)
+            self._save()
         return self.status()
 
     def reset(self, baseline_sources: Iterable[str] | None = None) -> dict:
         return self.start(baseline_sources=baseline_sources)
 
     def record_cycle(self, results: Iterable[SyncResult]) -> dict:
-        if not self.data.get("started_at"):
-            self.start()
         rows = list(results)
-        errors = [row.source_id for row in rows if row.status != "success"]
-        source_attempts = self.data.setdefault("source_attempts", {})
-        source_errors = self.data.setdefault("source_errors", {})
-        for row in rows:
-            source_attempts[row.source_id] = int(source_attempts.get(row.source_id, 0)) + 1
-            if row.status != "success":
-                source_errors[row.source_id] = int(source_errors.get(row.source_id, 0)) + 1
-        self.data["last_cycle_at"] = _now()
-        self.data["cycles_total"] = int(self.data.get("cycles_total", 0)) + 1
-        self.data["sync_attempts"] = int(self.data.get("sync_attempts", 0)) + len(rows)
-        self.data["sync_successes"] = int(self.data.get("sync_successes", 0)) + sum(1 for row in rows if row.status == "success")
-        self.data["sync_errors"] = int(self.data.get("sync_errors", 0)) + len(errors)
-        if errors:
-            self.data["cycles_with_errors"] = int(self.data.get("cycles_with_errors", 0)) + 1
-        self.data["last_errors"] = errors
-        self._save()
+        with file_lock(self.lock_path, timeout=60):
+            self.data = self._load()
+            if not self.data.get("started_at"):
+                self.data = self._new_state()
+            errors = [row.source_id for row in rows if row.status != "success"]
+            source_attempts = self.data.setdefault("source_attempts", {})
+            source_errors = self.data.setdefault("source_errors", {})
+            for row in rows:
+                source_attempts[row.source_id] = int(source_attempts.get(row.source_id, 0)) + 1
+                if row.status != "success":
+                    source_errors[row.source_id] = int(source_errors.get(row.source_id, 0)) + 1
+            self.data["last_cycle_at"] = _now()
+            self.data["cycles_total"] = int(self.data.get("cycles_total", 0)) + 1
+            self.data["sync_attempts"] = int(self.data.get("sync_attempts", 0)) + len(rows)
+            self.data["sync_successes"] = int(self.data.get("sync_successes", 0)) + sum(1 for row in rows if row.status == "success")
+            self.data["sync_errors"] = int(self.data.get("sync_errors", 0)) + len(errors)
+            if errors:
+                self.data["cycles_with_errors"] = int(self.data.get("cycles_with_errors", 0)) + 1
+            self.data["last_errors"] = errors
+            self._save()
         return self.status()
 
     def status(self) -> dict:
+        self.data = self._load()
         started = _parse(self.data.get("started_at"))
         now = datetime.now(timezone.utc)
         elapsed_days = 0.0
