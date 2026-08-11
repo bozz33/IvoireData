@@ -7,6 +7,17 @@ from pathlib import Path
 from ..upstream_state import UpstreamState
 
 
+def _file_digest(path: Path, algorithm: str) -> str:
+    digest = hashlib.new(algorithm)
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def geofabrik_snapshot_resource(
     *,
     page_url: str,
@@ -19,9 +30,9 @@ def geofabrik_snapshot_resource(
     """Keep a local OpenStreetMap/Geofabrik snapshot without redundant transfers.
 
     Geofabrik publishes an MD5 sidecar for extracts. The sidecar is the preferred
-    lightweight version signal. If it is temporarily unavailable, HTTP validators
-    (ETag/Last-Modified) are used as a fallback. A full PBF is never transferred merely
-    because a scheduled check ran.
+    lightweight version signal. On the first v0.8.2 run, an existing v0.8.1 extract is
+    hashed locally once and adopted if its MD5 equals the current official sidecar, so a
+    large PBF is not downloaded merely to initialize the new cache.
     """
     import dlt
     import requests
@@ -58,14 +69,41 @@ def geofabrik_snapshot_resource(
 
         known_md5 = str(cached.get("remote_md5") or cached.get("md5") or "") or None
         local_md5 = known_md5 if path.exists() else None
-        if path.exists() and remote_md5 and known_md5 == remote_md5:
+        adopted_existing = False
+
+        # One-time v0.8.1 -> v0.8.2 migration: compute the local checksum instead of
+        # transferring the same large extract again merely because upstreams.json is new.
+        if path.exists() and remote_md5 and not known_md5:
+            local_md5 = _file_digest(path, "md5")
+            if local_md5 == remote_md5:
+                adopted_existing = True
+                sha256 = _file_digest(path, "sha256")
+                size = path.stat().st_size
+                last_modified = None
+                changed = False
+                if upstream:
+                    upstream.mark_downloaded(
+                        source_id, artifact,
+                        url=file_url,
+                        signature=remote_md5,
+                        sha256=sha256,
+                        size_bytes=size,
+                        method="ADOPTED_EXISTING_MD5",
+                        local_path=str(path),
+                        extra={"md5": local_md5, "remote_md5": remote_md5},
+                    )
+
+        if not adopted_existing and path.exists() and remote_md5 and known_md5 == remote_md5:
             changed = False
             sha256 = str(cached.get("sha256") or "") or None
             size = int(cached.get("size_bytes") or path.stat().st_size)
             last_modified = cached.get("last_modified")
             if upstream:
-                upstream.mark_unchanged(source_id, artifact, signature=remote_md5, url=file_url, reason="GEOFABRIK_MD5")
-        else:
+                upstream.mark_unchanged(
+                    source_id, artifact, signature=remote_md5, url=file_url,
+                    reason="GEOFABRIK_MD5", extra={"md5": local_md5, "remote_md5": remote_md5},
+                )
+        elif not adopted_existing:
             headers = upstream.conditional_headers(source_id, artifact) if upstream else {}
             response = session.get(file_url, timeout=900, stream=True, headers=headers)
             if response.status_code == 304 and path.exists():
@@ -74,7 +112,10 @@ def geofabrik_snapshot_resource(
                 size = int(cached.get("size_bytes") or path.stat().st_size)
                 last_modified = cached.get("last_modified")
                 if upstream:
-                    upstream.mark_http_unchanged(source_id, artifact, url=file_url)
+                    upstream.mark_http_unchanged(
+                        source_id, artifact, url=file_url,
+                        extra={"md5": local_md5, "remote_md5": remote_md5},
+                    )
             else:
                 response.raise_for_status()
                 temp = path.with_suffix(path.suffix + ".part")
@@ -110,20 +151,13 @@ def geofabrik_snapshot_resource(
                         last_modified=last_modified,
                         method="GEOFABRIK_MD5" if remote_md5 else "HTTP_VALIDATORS",
                         local_path=str(path),
+                        extra={"md5": local_md5, "remote_md5": remote_md5},
                     )
-                    # Preserve the checksum explicitly because signature may fall back to ETag.
-                    row = upstream.data["resources"].get(upstream.key(source_id, artifact), {})
-                    row["md5"] = local_md5
-                    row["remote_md5"] = remote_md5
-                    from ..state_io import atomic_write_json
-                    atomic_write_json(upstream.path, upstream.data)
 
         if sha256 is None and path.exists():
-            # Migration fallback only. After the first v0.8.2 run SHA is persisted and
-            # this expensive local scan is no longer repeated.
-            sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+            sha256 = _file_digest(path, "sha256")
         if local_md5 is None and path.exists():
-            local_md5 = hashlib.md5(path.read_bytes()).hexdigest()
+            local_md5 = _file_digest(path, "md5")
 
         yield {
             "source_id": source_id,
@@ -135,6 +169,7 @@ def geofabrik_snapshot_resource(
             "remote_md5": remote_md5,
             "sha256": sha256,
             "changed": changed,
+            "adopted_existing": adopted_existing,
             "last_modified": last_modified,
             "incremental_check": "MD5" if remote_md5 else "HTTP_VALIDATORS",
         }
