@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .delivery import ensure_source_layout
 from .dlt_tables import make_incremental_replace_safe
@@ -32,10 +32,12 @@ def _pipeline_name(base: str, source_id: str) -> str:
 class _SafePipelineProxy:
     """Delegate to dlt while isolating tables and serializing one source at a time."""
 
-    def __init__(self, pipeline: Any, *, protect_partial_replace: bool, lock_path: Path | None = None):
+    def __init__(self, pipeline: Any, *, protect_partial_replace: bool,
+                 lock_path: Path | None = None, post_success: Callable[[], Any] | None = None):
         self._pipeline = pipeline
         self._protect_partial_replace = protect_partial_replace
         self._lock_path = lock_path
+        self._post_success = post_success
 
     def __getattr__(self, name: str):
         return getattr(self._pipeline, name)
@@ -43,7 +45,10 @@ class _SafePipelineProxy:
     def _run(self, data: Any, *args: Any, **kwargs: Any):
         if self._protect_partial_replace and hasattr(data, "apply_hints") and hasattr(data, "add_map"):
             data = make_incremental_replace_safe(data)
-        return self._pipeline.run(data, *args, **kwargs)
+        result = self._pipeline.run(data, *args, **kwargs)
+        if self._post_success is not None:
+            self._post_success()
+        return result
 
     def run(self, data: Any, *args: Any, **kwargs: Any):
         if self._lock_path is None:
@@ -80,7 +85,8 @@ def get_source_pipeline(settings: Settings, spec: SourceSpec):
     connectors the proxy rewrites resource-level replace semantics into independent
     per-table variants, preventing an unchanged omitted table from being truncated.
     A shared file lock also prevents concurrent runs of the *same* source from API,
-    scheduler and one-shot containers.
+    scheduler and one-shot containers. Source-specific migration cleanup runs only
+    after dlt has committed successfully and while that same lock is still held.
     """
     import dlt
     from dlt.destinations import filesystem
@@ -96,8 +102,14 @@ def get_source_pipeline(settings: Settings, spec: SourceSpec):
         destination=destination,
         dataset_name="data",
     )
+
+    def post_success():
+        from .post_sync import cleanup_after_success
+        cleanup_after_success(settings, spec)
+
     return _SafePipelineProxy(
         pipeline,
         protect_partial_replace=spec.connector in _INCREMENTAL_PARTIAL_CONNECTORS,
         lock_path=settings.state_dir / "locks" / f"{_SAFE.sub('_', spec.source_id)}.lock",
+        post_success=post_success,
     )
