@@ -6,9 +6,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .locks import file_lock
 from .metadata import source_metadata
 from .models import SourceSpec
 from .settings import Settings
+from .state_io import atomic_write_json
 
 _SAFE = re.compile(r"[^a-zA-Z0-9_.-]+")
 
@@ -223,28 +225,18 @@ def write_source_manifest(
             "due": bool(due),
             "last_success": state.get("last_success"),
         },
-        "transport": {
-            "security": transport_security,
-        },
-        "rights": {
-            "tier": spec.rights_tier,
-            "access": spec.access_tier,
-        },
+        "transport": {"security": transport_security},
+        "rights": {"tier": spec.rights_tier, "access": spec.access_tier},
         "warnings": warnings,
-        "paths": {
-            "tables": "tables/",
-            "raw": "raw/",
-            "documents": "documents/",
-        },
+        "paths": {"tables": "tables/", "raw": "raw/", "documents": "documents/"},
         "inventory": inv,
         "details": details[-4000:],
     }
-    paths["manifest"].write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(paths["manifest"], manifest)
     return manifest
 
 
-def rebuild_catalog(settings: Settings, specs: list[SourceSpec]) -> dict[str, Any]:
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
+def _build_catalog(settings: Settings, specs: list[SourceSpec]) -> dict[str, Any]:
     domains: dict[str, list[dict[str, Any]]] = {}
     sources: list[dict[str, Any]] = []
     for spec in specs:
@@ -273,7 +265,7 @@ def rebuild_catalog(settings: Settings, specs: list[SourceSpec]) -> dict[str, An
             }
         sources.append(item)
         domains.setdefault(spec.domain, []).append(item)
-    catalog = {
+    return {
         "schema_version": 3,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "storage": "local",
@@ -284,8 +276,15 @@ def rebuild_catalog(settings: Settings, specs: list[SourceSpec]) -> dict[str, An
         "domain_index": {name: [row.get("source_id") for row in rows] for name, rows in sorted(domains.items())},
         "sources": sources,
     }
-    (settings.data_dir / "catalog.json").write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
-    return catalog
+
+
+def rebuild_catalog(settings: Settings, specs: list[SourceSpec]) -> dict[str, Any]:
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    lock = settings.state_dir / "locks" / "catalog.lock"
+    with file_lock(lock, timeout=120):
+        catalog = _build_catalog(settings, specs)
+        atomic_write_json(settings.data_dir / "catalog.json", catalog)
+        return catalog
 
 
 def inventory(settings: Settings, specs: list[SourceSpec]) -> dict[str, Any]:
