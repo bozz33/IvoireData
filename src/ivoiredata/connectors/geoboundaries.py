@@ -44,6 +44,13 @@ def geoboundaries_resource(
     import dlt
     import requests
 
+    replay_dir = snapshot_dir
+    if replay_dir is None and upstream_state_path is not None:
+        # Engine versions before this hotfix did not pass a raw snapshot directory to
+        # geoBoundaries. Keep the replay cache persistent under .ivoiredata so a 304 for
+        # one ADM level can still participate in a complete aggregate-table rebuild.
+        replay_dir = upstream_state_path.parent / "upstream_cache" / source_id
+
     @dlt.resource(name="geoboundaries", write_disposition="replace")
     def resource():
         session = requests.Session()
@@ -71,8 +78,6 @@ def geoboundaries_resource(
             if meta_response.status_code == 304:
                 meta = cached_meta.get("metadata_payload")
                 if not isinstance(meta, (dict, list)):
-                    # A legacy cache may have validators without the payload needed for a
-                    # complete aggregate rebuild. Refetch once and seed the replay cache.
                     meta_response = session.get(meta_url, timeout=120)
                     meta_response.raise_for_status()
                     meta = meta_response.json()
@@ -146,8 +151,6 @@ def geoboundaries_resource(
 
                 if response.status_code == 304:
                     if local_path is None:
-                        # Validators without a replayable snapshot are not enough to rebuild
-                        # the combined table after another ADM level changes. Seed it once.
                         response = session.get(download_url, timeout=240)
                     else:
                         if upstream:
@@ -161,7 +164,7 @@ def geoboundaries_resource(
                     digest = hashlib.sha256(response.content).hexdigest()
                     changed = boundary_signatures.get(boundary_artifact) != digest
                     snapshot = save_snapshot(
-                        snapshot_dir,
+                        replay_dir,
                         source_id=source_id,
                         url=download_url,
                         content=response.content,
