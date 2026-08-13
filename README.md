@@ -1,10 +1,10 @@
 # IvoireData 🇨🇮
 
-**v0.8.2 — moteur local CI Gold de collecte officielle, incrémentale, classification, audit et qualification des données publiques de Côte d’Ivoire**
+**v0.8.3 — moteur local CI Gold de collecte officielle, incrémentale, classification, audit et qualification des données publiques de Côte d’Ivoire**
 
 IvoireData collecte et organise des sources publiques ivoiriennes, conserve provenance/droits, classe les contenus par domaine, ajoute `country_code=CIV`, gère les mises à jour manuelles/automatiques et mesure la couverture nationale sans confondre « source connue » et « donnée réellement livrée ».
 
-## v0.8.2 : synchronisation incrémentale robuste
+## v0.8.3 : synchronisation incrémentale robuste
 
 La vérification d'une source ne signifie plus que son contenu est retéléchargé. Le moteur utilise, dans cet ordre :
 
@@ -21,6 +21,8 @@ L'état réseau est persistant dans :
 Les états JSON sont écrits atomiquement. Un état corrompu est mis en quarantaine sous `*.corrupt-<timestamp>` au lieu d'empêcher le moteur de démarrer.
 
 `--force` signifie désormais **vérifier maintenant**. Il ne force jamais volontairement le téléchargement d'une version identique déjà matérialisée.
+
+Lorsqu'une grosse source structurée termine avec un backlog ou un échec partiel, le scheduler la retente sur une cadence courte (6 h par défaut, configurable avec `partial_retry_hours`) **sans `force`**. Les signatures officielles et le cache local empêchent donc de retransférer les artefacts déjà acquis ; seuls les éléments manquants, nouveaux ou modifiés sont repris. Un tel cycle est marqué `partial` pour la qualification CI Gold tant que le backlog n'est pas résorbé.
 
 ```bash
 ivoiredata upstreams
@@ -125,7 +127,7 @@ data_lake/
 └── ci_gold_qualification.json
 ```
 
-## Mise à niveau v0.8.2
+## Mise à niveau v0.8.3
 
 Pendant la migration, arrêter le scheduler, sauvegarder `.ivoiredata/` et le data lake, reconstruire l'image, puis migrer **les grandes sources structurées une par une**. Il n'est pas nécessaire de relancer immédiatement un `--all-public --force`.
 
