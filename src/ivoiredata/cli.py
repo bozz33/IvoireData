@@ -11,8 +11,8 @@ from .scheduler import run_forever, run_once
 
 
 def parser():
-    p = argparse.ArgumentParser(prog="ivoiredata", description="IvoireData local source collection and CI Gold delivery engine")
-    p.add_argument("--version", action="version", version="ivoiredata 0.8.2")
+    p = argparse.ArgumentParser(prog="ivoiredata", description="IvoireData local source collection, CI Gold and official programming documentation engine")
+    p.add_argument("--version", action="version", version="ivoiredata 0.8.3")
     sub = p.add_subparsers(dest="command", required=True)
     s = sub.add_parser("sources"); s.add_argument("--public", action="store_true"); s.add_argument("--all", action="store_true", help="include disabled sources")
     s = sub.add_parser("status"); s.add_argument("--public", action="store_true"); s.add_argument("--all", action="store_true", help="include disabled sources")
@@ -28,6 +28,16 @@ def parser():
     s = sub.add_parser("sync"); s.add_argument("source_id", nargs="?"); s.add_argument("--due", action="store_true"); s.add_argument("--all-public", action="store_true"); s.add_argument("--force", action="store_true")
     s = sub.add_parser("scheduler"); s.add_argument("--interval", type=int, default=None); s.add_argument("--once", action="store_true")
     s = sub.add_parser("query"); s.add_argument("source_id"); s.add_argument("sql"); s.add_argument("--max-rows", type=int, default=1000)
+
+    pdocs = sub.add_parser("programming-docs", help="official language/framework documentation corpus")
+    pdocs_sub = pdocs.add_subparsers(dest="programming_docs_action", required=True)
+    pdocs_sub.add_parser("audit", help="report completeness grouped by programming language")
+    pdocs_sub.add_parser("report", help="write programming documentation audit artifacts")
+    pdocs_sub.add_parser("languages", help="list registered programming languages and source counts")
+    pdocs_sync = pdocs_sub.add_parser("sync", help="synchronize all docs or one programming language")
+    pdocs_sync.add_argument("--language", default=None, help="exact language group, e.g. PHP, Python, Rust, JavaScript, C#")
+    pdocs_sync.add_argument("--force", action="store_true", help="check now; unchanged bodies are still not downloaded twice")
+    pdocs_sync.add_argument("--due", action="store_true", help="only synchronize sources whose refresh interval is due")
 
     src = sub.add_parser("source")
     src_subs = src.add_subparsers(dest="source_action", required=True)
@@ -117,6 +127,39 @@ def _qualification_control(engine: IvoireDataEngine, args) -> int:
     print(json.dumps(payload, indent=2, ensure_ascii=False)); return 0
 
 
+def _programming_docs_control(engine: IvoireDataEngine, args) -> int:
+    action = args.programming_docs_action
+    if action == "audit":
+        print(json.dumps(engine.programming_docs_audit(), indent=2, ensure_ascii=False, default=str))
+        return 0
+    if action == "report":
+        print(json.dumps(engine.write_programming_docs_report(), indent=2, ensure_ascii=False, default=str))
+        return 0
+    if action == "languages":
+        audit = engine.programming_docs_audit()
+        payload = {
+            language: {
+                "sources": info.get("sources", 0),
+                "complete_sources": info.get("complete_sources", 0),
+                "selected_pages": info.get("selected_pages", 0),
+                "complete": info.get("complete", False),
+            }
+            for language, info in audit.get("by_language", {}).items()
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    if action == "sync":
+        results = engine.sync_programming_docs(language=args.language, force=args.force, due_only=args.due)
+        if args.language and not results:
+            known = sorted(engine.programming_docs_audit().get("by_language", {}).keys())
+            raise SystemExit(f"no programming documentation source registered for {args.language!r}; known languages: {', '.join(known)}")
+        failed = 0
+        for result in results:
+            print(json.dumps(result.__dict__, ensure_ascii=False)); failed += result.status != "success"
+        return 1 if failed else 0
+    raise SystemExit(f"unknown programming-docs action: {action}")
+
+
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
     engine = IvoireDataEngine()
@@ -146,6 +189,7 @@ def main(argv=None) -> int:
     if args.command == "ci-gold":
         payload = engine.write_ci_gold() if args.write else engine.ci_gold()
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str)); return 0
+    if args.command == "programming-docs": return _programming_docs_control(engine, args)
     if args.command == "inventory": print(json.dumps(inventory(engine.settings, engine.registry.list()), ensure_ascii=False, indent=2)); return 0
     if args.command == "audit": print(json.dumps(engine.audit(public_only=not args.all), ensure_ascii=False, indent=2)); return 0
     if args.command == "source-path":
