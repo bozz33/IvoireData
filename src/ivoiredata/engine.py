@@ -120,6 +120,7 @@ class IvoireDataEngine:
                 api_url=spec.source_url,
                 source_id=spec.source_id,
                 user_agent=self.settings.user_agent,
+                snapshot_dir=p["raw"],
                 upstream_state_path=upstream_state_path,
             )
         if spec.connector == "ilostat_ref_area":
@@ -235,7 +236,6 @@ class IvoireDataEngine:
     def upstream_audit(self, source_id: str | None = None) -> dict:
         """Summarize the persistent network cache and last upstream result by source."""
         if source_id is not None:
-            # Validate early so typos don't look like an empty successful source.
             self.registry.get(source_id)
             source_ids = [source_id]
         else:
@@ -344,77 +344,51 @@ class IvoireDataEngine:
             else:
                 manifest = {}
             delivery = manifest.get("delivery", {})
-            sync_status = str(manifest.get("status") or state.get("last_status") or "never").upper()
-            delivery_status = str(manifest.get("delivery_status") or delivery.get("status") or "EMPTY")
-            if state.get("last_status") == "error" and state.get("last_success"):
-                freshness_status = "STALE"
-            elif not state.get("last_success"):
-                freshness_status = "NEVER_SYNCED"
-            else:
-                freshness_status = "DUE" if self.freshness.due(spec) else "FRESH"
-            transport = manifest.get("transport_security") or manifest.get("transport", {}).get("security")
-            count = int(delivery.get("rows") or manifest.get("inventory", {}).get("tables", {}).get("rows") or 0)
-            meta = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else source_metadata(spec)
-            row = {
+            sync_status = str(manifest.get("status") or state.get("last_status") or "NEVER").upper()
+            delivery_status = str(delivery.get("status") or "EMPTY").upper()
+            fresh = self.freshness.status(spec)
+            freshness_status = str(fresh.get("status") or "UNKNOWN").upper()
+            transfer = str(delivery.get("transport") or "UNKNOWN").upper()
+            structured = int(delivery.get("structured_rows") or 0)
+            documents = int(delivery.get("document_rows") or 0)
+            rows_count = int(delivery.get("total_rows") or structured + documents)
+            structured_rows += structured
+            document_rows += documents
+            total_rows += rows_count
+            delivery_counts[delivery_status] = delivery_counts.get(delivery_status, 0) + 1
+            sync_counts[sync_status] = sync_counts.get(sync_status, 0) + 1
+            freshness_counts[freshness_status] = freshness_counts.get(freshness_status, 0) + 1
+            transport_counts[transfer] = transport_counts.get(transfer, 0) + 1
+            rows.append({
                 "source_id": spec.source_id,
+                "title": spec.title,
+                "provider": spec.provider,
                 "domain": spec.domain,
-                "country_code": meta.get("country_code", "CIV"),
+                "priority": spec.priority,
                 "connector": spec.connector,
+                "refresh_hours": spec.refresh_hours,
+                "auto_sync": spec.auto_sync,
                 "sync_status": sync_status,
                 "delivery_status": delivery_status,
                 "freshness_status": freshness_status,
-                "transport_security": transport,
-                "rows": count,
-                "raw_files": int(delivery.get("raw_files") or manifest.get("inventory", {}).get("raw", {}).get("files") or 0),
-                "table_files": int(delivery.get("table_files") or manifest.get("inventory", {}).get("tables", {}).get("files") or 0),
-                "document_files": int(delivery.get("document_files") or manifest.get("inventory", {}).get("documents", {}).get("files") or 0),
-                "warnings": manifest.get("warnings", []),
+                "transport": transfer,
+                "structured_rows": structured,
+                "document_rows": documents,
+                "total_rows": rows_count,
                 "last_success": state.get("last_success"),
-            }
-            rows.append(row)
-            sync_counts[sync_status] = sync_counts.get(sync_status, 0) + 1
-            delivery_counts[delivery_status] = delivery_counts.get(delivery_status, 0) + 1
-            freshness_counts[freshness_status] = freshness_counts.get(freshness_status, 0) + 1
-            if transport:
-                transport_counts[str(transport)] = transport_counts.get(str(transport), 0) + 1
-            total_rows += count
-            if delivery_status == "FULL_STRUCTURED":
-                structured_rows += count
-            elif delivery_status == "DOCUMENTS_ONLY":
-                document_rows += count
-
-        usable = sum(1 for row in rows if row["delivery_status"] != "EMPTY")
+                "last_attempt": state.get("last_attempt"),
+                "last_error": state.get("last_error"),
+            })
         return {
             "summary": {
-                "country_code": "CIV",
                 "sources": len(rows),
-                "usable_delivery": usable,
-                "empty_delivery": len(rows) - usable,
-                "sync": dict(sorted(sync_counts.items())),
                 "delivery": dict(sorted(delivery_counts.items())),
+                "sync": dict(sorted(sync_counts.items())),
                 "freshness": dict(sorted(freshness_counts.items())),
                 "transport": dict(sorted(transport_counts.items())),
-                "rows": {
-                    "structured": structured_rows,
-                    "documents": document_rows,
-                    "total_parquet": total_rows,
-                },
+                "structured_rows": structured_rows,
+                "document_rows": document_rows,
+                "total_rows": total_rows,
             },
             "rows": rows,
         }
-
-    def coverage_audit(self) -> dict:
-        from .ci_gold import coverage_audit
-        return coverage_audit(self)
-
-    def quality_audit(self) -> dict:
-        from .ci_gold import quality_audit
-        return quality_audit(self)
-
-    def ci_gold(self) -> dict:
-        from .ci_gold import ci_gold_report
-        return ci_gold_report(self)
-
-    def write_ci_gold(self) -> dict:
-        from .ci_gold import write_ci_gold_report
-        return write_ci_gold_report(self)
