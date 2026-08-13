@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from datetime import datetime, timezone
+from typing import Any
 
 from .connectors.bulk_catalog import bulk_catalog_resource
 from .connectors.data_gouv_ci import data_gouv_ci_resource, dataset_id_from_public_url
@@ -25,12 +26,101 @@ from .qualification import QualificationStore
 from .registry import SourceRegistry
 from .runtime_control import RuntimeControl
 from .settings import Settings
-from .state_io import load_json
+from .state_io import atomic_write_json, load_json
 from .upstream_state import UpstreamState
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _is_programming_docs(spec: SourceSpec) -> bool:
+    return spec.connector == "official_docs"
+
+
+def _audit_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    delivery: dict[str, int] = {}
+    sync: dict[str, int] = {}
+    freshness: dict[str, int] = {}
+    transport: dict[str, int] = {}
+    structured_rows = 0
+    document_rows = 0
+    total_rows = 0
+    for row in rows:
+        for bucket, key in ((delivery, "delivery_status"), (sync, "sync_status"), (freshness, "freshness_status"), (transport, "transport")):
+            value = str(row.get(key) or "UNKNOWN")
+            bucket[value] = bucket.get(value, 0) + 1
+        structured_rows += int(row.get("structured_rows") or 0)
+        document_rows += int(row.get("document_rows") or 0)
+        total_rows += int(row.get("total_rows") or 0)
+    return {
+        "sources": len(rows),
+        "delivery": dict(sorted(delivery.items())),
+        "sync": dict(sorted(sync.items())),
+        "freshness": dict(sorted(freshness.items())),
+        "transport": dict(sorted(transport.items())),
+        "structured_rows": structured_rows,
+        "document_rows": document_rows,
+        "total_rows": total_rows,
+    }
+
+
+class _ScopedRegistry:
+    def __init__(self, registry: SourceRegistry, predicate):
+        self._registry = registry
+        self._predicate = predicate
+
+    def all(self) -> list[SourceSpec]:
+        return [spec for spec in self._registry.all() if self._predicate(spec)]
+
+    def list(self, *, public_only: bool = False, auto_only: bool = False) -> list[SourceSpec]:
+        return [
+            spec for spec in self._registry.list(public_only=public_only, auto_only=auto_only)
+            if self._predicate(spec)
+        ]
+
+    def get(self, source_id: str) -> SourceSpec:
+        spec = self._registry.get(source_id)
+        if not self._predicate(spec):
+            raise KeyError(f"source outside scoped registry: {source_id}")
+        return spec
+
+
+class _CIGoldEngineView:
+    def __init__(self, engine: "IvoireDataEngine"):
+        self._engine = engine
+        self.settings = engine.settings
+        self.registry = _ScopedRegistry(engine.registry, lambda spec: not _is_programming_docs(spec))
+        self.qualification = engine.qualification
+
+    def __getattr__(self, name: str):
+        return getattr(self._engine, name)
+
+    def audit(self, *, public_only: bool = True) -> dict[str, Any]:
+        allowed = {spec.source_id for spec in self.registry.list(public_only=public_only)}
+        rows = [row for row in self._engine.audit(public_only=public_only)["rows"] if row["source_id"] in allowed]
+        return {"summary": _audit_summary(rows), "rows": rows}
+
+    def upstream_audit(self, source_id: str | None = None) -> dict[str, Any]:
+        if source_id is not None:
+            self.registry.get(source_id)
+            return self._engine.upstream_audit(source_id)
+        allowed = {spec.source_id for spec in self.registry.all()}
+        payload = self._engine.upstream_audit()
+        rows = [row for row in payload.get("rows", []) if row.get("source_id") in allowed]
+        totals: dict[str, int] = {}
+        for row in rows:
+            for result, count in (row.get("last_results") or {}).items():
+                totals[result] = totals.get(result, 0) + int(count)
+        return {
+            "state_path": payload.get("state_path"),
+            "summary": {
+                "sources": len(rows),
+                "artifacts": sum(int(row.get("artifacts") or 0) for row in rows),
+                "last_results": dict(sorted(totals.items())),
+            },
+            "rows": rows,
+        }
 
 
 class IvoireDataEngine:
@@ -215,7 +305,7 @@ class IvoireDataEngine:
 
     def _write_manifest(self, spec: SourceSpec, *, status: str, started: str, finished: str, details: str) -> None:
         state = self.freshness.data.get(spec.source_id, {})
-        write_source_manifest(
+        manifest = write_source_manifest(
             self.settings,
             spec,
             status=status,
@@ -226,9 +316,38 @@ class IvoireDataEngine:
             freshness_state=state,
             due=self.freshness.due(spec),
         )
+        if _is_programming_docs(spec):
+            options = spec.options
+            taxonomy = {
+                "corpus_scope": str(options.get("corpus_scope") or "PROGRAMMING_DOCUMENTATION"),
+                "programming_language": str(options.get("programming_language") or "General"),
+                "framework": options.get("framework"),
+                "runtime": options.get("runtime"),
+                "library": options.get("library"),
+                "tool": options.get("tool"),
+                "doc_version": options.get("doc_version"),
+                "version_policy": str(options.get("version_policy") or "CURRENT_STABLE"),
+                "license_name": options.get("license_name"),
+                "license_url": options.get("license_url"),
+                "license_review_status": str(options.get("license_review_status") or "UNREVIEWED"),
+                "training_eligible": bool(options.get("training_eligible", False)),
+            }
+            manifest["country_code"] = "GLOBAL"
+            manifest["country_name"] = "Global"
+            metadata = manifest.setdefault("metadata", {})
+            metadata.update({
+                "country_code": "GLOBAL",
+                "country_name": "Global",
+                "geographic_scope": "GLOBAL",
+                "primary_domain": "software_development",
+                "language": str(options.get("language") or "en"),
+                "document_type": "DEVELOPER_DOCUMENTATION",
+                **taxonomy,
+            })
+            manifest["programming_documentation"] = taxonomy
+            atomic_write_json(source_paths(self.settings, spec)["manifest"], manifest)
 
     def _post_sync_cleanup(self, spec: SourceSpec) -> None:
-        """Move obsolete legacy tables only after their replacement sync is complete."""
         if spec.source_id != "civ_ilostat":
             return
         paths = source_paths(self.settings, spec)
@@ -275,7 +394,6 @@ class IvoireDataEngine:
         return [self.sync(s.source_id, force=force) for s in self.registry.list(public_only=public_only, auto_only=auto_only) if force or self.freshness.due(s)]
 
     def upstream_audit(self, source_id: str | None = None) -> dict:
-        """Summarize the persistent network cache and last upstream result by source."""
         if source_id is not None:
             self.registry.get(source_id)
             source_ids = [source_id]
@@ -325,18 +443,13 @@ class IvoireDataEngine:
         }
 
     def qualification_baseline(self) -> list[str]:
-        """Return clean/fresh Côte d'Ivoire AUTO sources at qualification start."""
         audit_map = {row["source_id"]: row for row in self.audit(public_only=True)["rows"]}
         baseline: list[str] = []
         for spec in self.registry.list(public_only=True, auto_only=True):
-            if spec.connector == "official_docs":
+            if _is_programming_docs(spec):
                 continue
             row = audit_map.get(spec.source_id, {})
-            if (
-                row.get("sync_status") == "SUCCESS"
-                and row.get("delivery_status") != "EMPTY"
-                and row.get("freshness_status") == "FRESH"
-            ):
+            if row.get("sync_status") == "SUCCESS" and row.get("delivery_status") != "EMPTY" and row.get("freshness_status") == "FRESH":
                 baseline.append(spec.source_id)
         return sorted(baseline)
 
@@ -368,14 +481,7 @@ class IvoireDataEngine:
         }
 
     def audit(self, *, public_only: bool = True) -> dict:
-        rows = []
-        delivery_counts: dict[str, int] = {}
-        sync_counts: dict[str, int] = {}
-        freshness_counts: dict[str, int] = {}
-        transport_counts: dict[str, int] = {}
-        structured_rows = 0
-        document_rows = 0
-        total_rows = 0
+        rows: list[dict[str, Any]] = []
         for spec in self.registry.list(public_only=public_only):
             manifest_path = source_paths(self.settings, spec)["manifest"]
             state = self.freshness.data.get(spec.source_id, {})
@@ -386,27 +492,24 @@ class IvoireDataEngine:
                     manifest = {}
             else:
                 manifest = {}
-            delivery = manifest.get("delivery", {})
+            delivery = manifest.get("delivery", {}) if isinstance(manifest.get("delivery"), dict) else {}
             sync_status = str(manifest.get("status") or state.get("last_status") or "NEVER").upper()
-            delivery_status = str(delivery.get("status") or "EMPTY").upper()
+            delivery_status = str(delivery.get("status") or manifest.get("delivery_status") or "EMPTY").upper()
             fresh = self.freshness.status(spec)
-            freshness_status = str(fresh.get("status") or "UNKNOWN").upper()
-            transfer = str(delivery.get("transport") or "UNKNOWN").upper()
-            structured = int(delivery.get("structured_rows") or 0)
-            documents = int(delivery.get("document_rows") or 0)
-            rows_count = int(delivery.get("total_rows") or structured + documents)
-            structured_rows += structured
-            document_rows += documents
-            total_rows += rows_count
-            delivery_counts[delivery_status] = delivery_counts.get(delivery_status, 0) + 1
-            sync_counts[sync_status] = sync_counts.get(sync_status, 0) + 1
-            freshness_counts[freshness_status] = freshness_counts.get(freshness_status, 0) + 1
-            transport_counts[transfer] = transport_counts.get(transfer, 0) + 1
+            freshness_status = str(fresh.get("status") or manifest.get("freshness_status") or "UNKNOWN").upper()
+            transport_info = manifest.get("transport", {}) if isinstance(manifest.get("transport"), dict) else {}
+            transfer = str(manifest.get("transport_security") or transport_info.get("security") or "UNKNOWN").upper()
+            rows_count = int(delivery.get("rows") or 0)
+            is_document = spec.connector in {"public_web", "official_docs"}
+            structured = 0 if is_document else rows_count
+            documents = rows_count if is_document else 0
+            metadata = manifest.get("metadata", {}) if isinstance(manifest.get("metadata"), dict) else {}
             rows.append({
                 "source_id": spec.source_id,
                 "title": spec.title,
                 "provider": spec.provider,
                 "domain": spec.domain,
+                "country_code": manifest.get("country_code") or metadata.get("country_code") or ("GLOBAL" if _is_programming_docs(spec) else "CIV"),
                 "priority": spec.priority,
                 "connector": spec.connector,
                 "refresh_hours": spec.refresh_hours,
@@ -415,23 +518,45 @@ class IvoireDataEngine:
                 "delivery_status": delivery_status,
                 "freshness_status": freshness_status,
                 "transport": transfer,
+                "transport_security": transfer,
                 "structured_rows": structured,
                 "document_rows": documents,
                 "total_rows": rows_count,
+                "rows": rows_count,
+                "warnings": manifest.get("warnings", []),
                 "last_success": state.get("last_success"),
                 "last_attempt": state.get("last_attempt"),
                 "last_error": state.get("last_error"),
             })
-        return {
-            "summary": {
-                "sources": len(rows),
-                "delivery": dict(sorted(delivery_counts.items())),
-                "sync": dict(sorted(sync_counts.items())),
-                "freshness": dict(sorted(freshness_counts.items())),
-                "transport": dict(sorted(transport_counts.items())),
-                "structured_rows": structured_rows,
-                "document_rows": document_rows,
-                "total_rows": total_rows,
-            },
-            "rows": rows,
-        }
+        return {"summary": _audit_summary(rows), "rows": rows}
+
+    def _ci_gold_view(self) -> _CIGoldEngineView:
+        return _CIGoldEngineView(self)
+
+    def coverage_audit(self) -> dict[str, Any]:
+        from .ci_gold import coverage_audit
+        return coverage_audit(self._ci_gold_view())
+
+    def quality_audit(self) -> dict[str, Any]:
+        from .ci_gold import quality_audit
+        return quality_audit(self._ci_gold_view())
+
+    def ci_gold(self) -> dict[str, Any]:
+        from .ci_gold import ci_gold_report
+        return ci_gold_report(self._ci_gold_view())
+
+    def write_ci_gold(self) -> dict[str, Any]:
+        from .ci_gold import write_ci_gold_report
+        return write_ci_gold_report(self._ci_gold_view())
+
+    def programming_docs_audit(self) -> dict[str, Any]:
+        from .programming_docs import programming_docs_audit
+        return programming_docs_audit(self)
+
+    def sync_programming_docs(self, *, language: str | None = None, force: bool = False, due_only: bool = False) -> list[SyncResult]:
+        from .programming_docs import sync_programming_docs
+        return sync_programming_docs(self, language=language, force=force, due_only=due_only)
+
+    def write_programming_docs_report(self) -> dict[str, Any]:
+        from .programming_docs import write_programming_docs_report
+        return write_programming_docs_report(self)
