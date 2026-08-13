@@ -12,7 +12,7 @@ from .query import query_source_sql
 from .ranking import rank_sources
 from .search import search_documents
 
-app = FastAPI(title="IvoireData Engine", version="0.8.2")
+app = FastAPI(title="IvoireData Engine", version="0.8.3")
 
 
 class SQLRequest(BaseModel):
@@ -35,7 +35,7 @@ class SourceSettingsRequest(BaseModel):
 def health():
     engine = IvoireDataEngine()
     return {
-        "status": "ok", "engine": "IvoireData", "version": "0.8.2",
+        "status": "ok", "engine": "IvoireData", "version": "0.8.3",
         "storage": "local", "country_code": "CIV", "data_dir": str(engine.settings.data_dir),
         "incremental_upstream_state": str(engine.settings.upstream_state_path),
     }
