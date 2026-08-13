@@ -11,24 +11,32 @@ from ivoiredata.runtime_control import load_runtime_config
 ALLOWED_CONNECTORS = {
     "data_gouv_ci", "http_file", "public_web", "world_bank_wdi", "world_bank_projects",
     "geoboundaries", "ilostat_ref_area", "osm_geofabrik", "bulk_catalog",
-    "faostat_country", "uis_country",
+    "faostat_country", "uis_country", "official_docs",
 }
 ALLOWED_COVERAGE_STATUS = {"CONTROLLED", "UNAVAILABLE", ""}
 
 registry_path = Path("registry/sources.csv")
 registry_overlay = Path("registry/ci_gold_completeness.csv")
+programming_registry = Path("registry/programming_docs.csv")
 runtime_path = Path("configs/runtime_sources.json")
 ci_gold_path = Path("configs/ci_gold_sources.json")
+programming_path = Path("configs/programming_docs_sources.json")
 coverage_path = Path("configs/ci_coverage.json")
+
 base = json.loads(runtime_path.read_text(encoding="utf-8"))
 ci_gold = json.loads(ci_gold_path.read_text(encoding="utf-8")) if ci_gold_path.exists() else {}
+programming = json.loads(programming_path.read_text(encoding="utf-8")) if programming_path.exists() else {}
+programming_expanded = load_runtime_config(programming_path) if programming_path.exists() else {}
 coverage = json.loads(coverage_path.read_text(encoding="utf-8")) if coverage_path.exists() else {}
-config = load_runtime_config(runtime_path, None, [ci_gold_path])
-registry = SourceRegistry.load(registry_path, runtime_path, None, [ci_gold_path], [registry_overlay])
+
+runtime_overlays = [path for path in (ci_gold_path, programming_path) if path.exists()]
+registry_overlays = [path for path in (registry_overlay, programming_registry) if path.exists()]
+config = load_runtime_config(runtime_path, None, runtime_overlays)
+registry = SourceRegistry.load(registry_path, runtime_path, None, runtime_overlays, registry_overlays)
 known = {spec.source_id for spec in registry.all()}
 errors: list[str] = []
 
-for label, payload in (("runtime", base), ("ci_gold", ci_gold)):
+for label, payload in (("runtime", base), ("ci_gold", ci_gold), ("programming_docs", programming_expanded)):
     for source_id in payload.get("sources", {}):
         if source_id not in known:
             errors.append(f"{label} config references unknown source: {source_id}")
@@ -40,6 +48,16 @@ for spec in registry.all():
         errors.append(f"{spec.source_id}: auto_sync enabled but unattended ingestion policy blocks this source")
     if spec.refresh_hours <= 0:
         errors.append(f"{spec.source_id}: refresh_hours must be > 0")
+    if spec.connector == "official_docs":
+        language = str(spec.options.get("programming_language") or "").strip()
+        if not language:
+            errors.append(f"{spec.source_id}: official_docs source missing programming_language")
+        if int(spec.options.get("max_pages") or 0) < 1:
+            errors.append(f"{spec.source_id}: official_docs max_pages must be >= 1")
+        if int(spec.options.get("max_new_bytes_per_run") or 0) < 1:
+            errors.append(f"{spec.source_id}: official_docs max_new_bytes_per_run must be >= 1")
+        if spec.options.get("training_eligible") is True and str(spec.options.get("license_review_status") or "").upper() not in {"TRAINING_APPROVED", "VERIFIED_FOR_TRAINING"}:
+            errors.append(f"{spec.source_id}: training_eligible requires an explicit training-approved license review")
 
 seen_domains: set[str] = set()
 for row in coverage.get("domains", []):
@@ -71,8 +89,9 @@ print(
     f"{len(known)} sources checked; "
     f"{len(base.get('sources', {}))} base overrides; "
     f"{len(ci_gold.get('sources', {}))} CI Gold overrides; "
+    f"{len(programming_expanded.get('sources', {}))} programming-doc overrides; "
     f"{len(seen_domains)} coverage domains"
 )
 if errors:
     print("\n".join(errors)); sys.exit(1)
-print("runtime config and CI Gold coverage OK")
+print("runtime config, CI Gold coverage and programming documentation overlays OK")
