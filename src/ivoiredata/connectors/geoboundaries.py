@@ -25,30 +25,38 @@ def _json_from_path(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def geoboundaries_resource(
     *,
     api_url: str,
     source_id: str = "civ_geoboundaries",
-    user_agent: str = "IvoireData/0.8.2",
+    user_agent: str = "IvoireData/0.8.3",
     snapshot_dir: Path | None = None,
     upstream_state_path: Path | None = None,
 ):
-    """Synchronize geoBoundaries without partial replacement loss.
+    """Synchronize geoBoundaries without partial replacement or false-304 loss.
 
-    `geoboundaries_metadata` and `geoboundaries_features` aggregate several ADM levels.
-    Therefore, when any one level changes, the connector rebuilds the *complete* affected
-    aggregate table: changed levels come from the network and unchanged levels are replayed
-    from content-addressed local GeoJSON snapshots. If nothing changed, no table is emitted
-    and the safe dlt pipeline keeps the existing tables untouched.
+    Aggregate metadata/features tables are rebuilt whenever any ADM level changed or an
+    interrupted previous run must be completed. Changed levels come from the network and
+    unchanged levels are replayed from persistent content-addressed snapshots. A 304 is
+    therefore safe even if dlt state was not committed yet: cached metadata/GeoJSON is
+    treated as changed relative to the missing dlt signature and is materialized locally.
     """
     import dlt
     import requests
 
     replay_dir = snapshot_dir
     if replay_dir is None and upstream_state_path is not None:
-        # Engine versions before this hotfix did not pass a raw snapshot directory to
-        # geoBoundaries. Keep the replay cache persistent under .ivoiredata so a 304 for
-        # one ADM level can still participate in a complete aggregate-table rebuild.
         replay_dir = upstream_state_path.parent / "upstream_cache" / source_id
 
     @dlt.resource(name="geoboundaries", write_disposition="replace")
@@ -77,6 +85,7 @@ def geoboundaries_resource(
             meta_changed = False
             if meta_response.status_code == 304:
                 meta = cached_meta.get("metadata_payload")
+                cached_digest = str(cached_meta.get("sha256") or cached_meta.get("signature") or "") or None
                 if not isinstance(meta, (dict, list)):
                     meta_response = session.get(meta_url, timeout=120)
                     meta_response.raise_for_status()
@@ -94,10 +103,15 @@ def geoboundaries_resource(
                             extra={"metadata_payload": meta},
                         )
                 else:
+                    # If dlt did not commit the preceding run, its level signature is
+                    # missing/different. The cached metadata must then be emitted again.
+                    meta_changed = metadata_signatures.get(level) != cached_digest
+                    if cached_digest:
+                        metadata_signatures[level] = cached_digest
                     if upstream:
                         upstream.mark_http_unchanged(
                             source_id, meta_artifact, url=meta_url,
-                            extra={"metadata_payload": meta},
+                            extra={"signature": cached_digest, "metadata_payload": meta},
                         )
             else:
                 meta_response.raise_for_status()
@@ -147,16 +161,23 @@ def geoboundaries_resource(
 
                 changed = False
                 local_path: Path | None = cached_path
-                digest: str | None = str(cached_boundary.get("sha256") or "") or None
+                digest: str | None = str(cached_boundary.get("sha256") or cached_boundary.get("signature") or "") or None
 
                 if response.status_code == 304:
                     if local_path is None:
                         response = session.get(download_url, timeout=240)
                     else:
+                        if digest is None:
+                            digest = _sha256_path(local_path)
+                        # Missing/different dlt state means the previous cached body was
+                        # not committed. Rebuild the aggregate from cache without a body
+                        # re-download.
+                        changed = boundary_signatures.get(boundary_artifact) != digest
+                        boundary_signatures[boundary_artifact] = digest
                         if upstream:
                             upstream.mark_http_unchanged(
                                 source_id, boundary_artifact, url=download_url,
-                                extra={"local_path": str(local_path)},
+                                extra={"signature": digest, "local_path": str(local_path)},
                             )
 
                 if response.status_code != 304:
