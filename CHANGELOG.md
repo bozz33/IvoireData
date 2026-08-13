@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.8.3 — final upstream hardening
+
+### Partial structured retries
+
+- Structured sources that finish a dlt load but still expose `failed`, `backlog_count`, `deferred_budget` or `skipped_oversize` are retried on a short cadence instead of waiting the normal 24/168/720-hour freshness window.
+- The default partial retry cadence is 6 hours and can be overridden per source with `options.partial_retry_hours`.
+- Partial retries always call the connector with `force=false`: official upstream signatures, HTTP validators and local snapshots remain authoritative, so already acquired unchanged payloads are not intentionally retransferred.
+- A scheduler result with an unresolved structured backlog is marked `partial`; the committed data remains usable, but the cycle cannot falsely count as a perfect CI Gold automatic success.
+
+### Release consistency
+
+- API, Docker image, compose deployment, package metadata and upstream User-Agent are aligned on v0.8.3.
+- Added regression tests for short-cadence retry, retry throttling, partial qualification status and completed-success behavior.
+
+### Operational rule
+
+After upgrading from v0.8.1/v0.8.2, migrate the large structured sources one by one, inspect their `*_sync_stats.json`, and immediately run them a second time with `--force`. The second run is the proof that unchanged content is not retransferred. Restart the 14-day CI Gold qualification only when structured `failed=0` and backlog is zero.
+
 ## v0.8.2 — official incremental upstreams
 
 ### Correctness
