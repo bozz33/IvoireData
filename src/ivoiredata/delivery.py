@@ -21,6 +21,9 @@ def safe_name(value: str) -> str:
 
 
 def source_root(settings: Settings, spec: SourceSpec) -> Path:
+    if spec.connector == "official_docs":
+        language = safe_name(str(spec.options.get("programming_language") or "general").casefold())
+        return settings.data_dir / "programming_docs" / language / safe_name(spec.source_id)
     return settings.data_dir / "domains" / safe_name(spec.domain) / safe_name(spec.source_id)
 
 
@@ -120,7 +123,7 @@ def compute_delivery_status(
             warnings.append("METADATA_ONLY_SOURCE")
     elif spec.connector == "osm_geofabrik":
         delivery = "SNAPSHOT_ONLY" if raw["files"] > 0 else "EMPTY"
-    elif spec.connector == "public_web":
+    elif spec.connector in {"public_web", "official_docs"}:
         if rows > 0 or documents["files"] > 0 or raw["files"] > 0:
             delivery = "DOCUMENTS_ONLY"
         else:
@@ -265,12 +268,13 @@ def _build_catalog(settings: Settings, specs: list[SourceSpec]) -> dict[str, Any
             }
         sources.append(item)
         domains.setdefault(spec.domain, []).append(item)
+    country_codes = sorted({str(source.get("country_code") or "") for source in sources if source.get("country_code")})
     return {
         "schema_version": 3,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "storage": "local",
-        "country_code": "CIV",
-        "country_name": "Côte d'Ivoire",
+        "scope": "MIXED" if len(country_codes) > 1 else (country_codes[0] if country_codes else "UNKNOWN"),
+        "country_codes": country_codes,
         "root": str(settings.data_dir),
         "domains": {name: rows for name, rows in sorted(domains.items())},
         "domain_index": {name: [row.get("source_id") for row in rows] for name, rows in sorted(domains.items())},
