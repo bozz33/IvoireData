@@ -12,7 +12,7 @@ from .query import query_source_sql
 from .ranking import rank_sources
 from .search import search_documents
 
-app = FastAPI(title="IvoireData Engine", version="0.8.2")
+app = FastAPI(title="IvoireData Engine", version="0.8.3")
 
 
 class SQLRequest(BaseModel):
@@ -34,9 +34,15 @@ class SourceSettingsRequest(BaseModel):
 @app.get("/health")
 def health():
     engine = IvoireDataEngine()
+    docs = [spec for spec in engine.registry.list() if spec.connector == "official_docs"]
     return {
-        "status": "ok", "engine": "IvoireData", "version": "0.8.2",
-        "storage": "local", "country_code": "CIV", "data_dir": str(engine.settings.data_dir),
+        "status": "ok",
+        "engine": "IvoireData",
+        "version": "0.8.3",
+        "storage": "local",
+        "scope": "CIV_PLUS_GLOBAL_PROGRAMMING_DOCS",
+        "programming_docs_sources": len(docs),
+        "data_dir": str(engine.settings.data_dir),
         "incremental_upstream_state": str(engine.settings.upstream_state_path),
     }
 
@@ -71,39 +77,75 @@ def status(public_only: bool = True):
 @app.get("/coverage")
 def coverage(): return IvoireDataEngine().coverage()
 
+
 @app.get("/coverage-audit")
 def coverage_audit(): return IvoireDataEngine().coverage_audit()
 
+
 @app.get("/quality-audit")
 def quality_audit(): return IvoireDataEngine().quality_audit()
+
 
 @app.get("/upstreams")
 def upstreams(source_id: str | None = None):
     try: return IvoireDataEngine().upstream_audit(source_id)
     except KeyError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+
 @app.get("/upstreams/{source_id}")
 def upstream_source(source_id: str):
     try: return IvoireDataEngine().upstream_audit(source_id)
     except KeyError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+
 @app.get("/discoveries")
 def discoveries(limit: int = 100): return data_gouv_discoveries(IvoireDataEngine(), limit=min(max(limit, 1), 1000))
+
 
 @app.get("/ci-gold")
 def ci_gold(): return IvoireDataEngine().ci_gold()
 
+
 @app.post("/ci-gold/report")
 def ci_gold_report(): return IvoireDataEngine().write_ci_gold()
+
+
+@app.get("/programming-docs")
+def programming_docs(): return IvoireDataEngine().programming_docs_audit()
+
+
+@app.get("/programming-docs/languages")
+def programming_doc_languages(): return IvoireDataEngine().programming_docs_audit().get("by_language", {})
+
+
+@app.post("/programming-docs/report")
+def programming_docs_report(): return IvoireDataEngine().write_programming_docs_report()
+
+
+@app.post("/programming-docs/sync")
+def programming_docs_sync(language: str | None = None, force: bool = False, due_only: bool = False):
+    engine = IvoireDataEngine()
+    results = engine.sync_programming_docs(language=language, force=force, due_only=due_only)
+    if language and not results:
+        known = sorted(engine.programming_docs_audit().get("by_language", {}).keys())
+        raise HTTPException(status_code=404, detail={"message": f"unknown programming language group: {language}", "known_languages": known})
+    failed = [result for result in results if result.status != "success"]
+    if failed:
+        raise HTTPException(status_code=502, detail={"results": [result.__dict__ for result in results]})
+    return {"results": [result.__dict__ for result in results]}
+
 
 @app.get("/qualification")
 def qualification(): return IvoireDataEngine().qualification.status()
 
+
 @app.post("/qualification/start")
 def qualification_start(): return IvoireDataEngine().start_qualification()
 
+
 @app.get("/audit")
 def audit(public_only: bool = True): return IvoireDataEngine().audit(public_only=public_only)
+
 
 @app.get("/inventory")
 def data_inventory():
