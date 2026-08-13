@@ -16,7 +16,7 @@ class Settings:
     runtime_config_path: Path = Path("configs/runtime_sources.json")
     ci_gold_runtime_path: Path = Path("configs/ci_gold_sources.json")
     ci_coverage_path: Path = Path("configs/ci_coverage.json")
-    user_agent: str = "IvoireData/0.8.2 (+https://github.com/bozz33/IvoireData)"
+    user_agent: str = "IvoireData/0.8.3 (+https://github.com/bozz33/IvoireData)"
 
     @classmethod
     def from_env(cls) -> "Settings":
