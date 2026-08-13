@@ -29,15 +29,46 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return out
 
 
+def _expand_source_groups(payload: dict[str, Any]) -> dict[str, Any]:
+    """Expand compact reusable source profiles into normal per-source overrides.
+
+    This is intentionally a packaging feature only. After expansion the rest of the
+    engine sees the exact historical `sources` structure, so mutable runtime overrides
+    and existing deployments remain fully backward compatible.
+    """
+    out = deepcopy(payload)
+    groups = out.pop("source_groups", {})
+    if not isinstance(groups, dict):
+        return out
+    sources = out.setdefault("sources", {})
+    if not isinstance(sources, dict):
+        sources = {}
+        out["sources"] = sources
+    for group in groups.values():
+        if not isinstance(group, dict):
+            continue
+        defaults = group.get("defaults", {})
+        entries = group.get("sources", {})
+        if not isinstance(defaults, dict) or not isinstance(entries, dict):
+            continue
+        for source_id, entry in entries.items():
+            if not isinstance(entry, dict):
+                entry = {}
+            generated = _deep_merge(defaults, entry)
+            existing = sources.get(str(source_id), {})
+            sources[str(source_id)] = _deep_merge(generated, existing if isinstance(existing, dict) else {})
+    return out
+
+
 def load_runtime_config(
     base_path: Path | None,
     overrides_path: Path | None = None,
     overlay_paths: Iterable[Path] | None = None,
 ) -> dict[str, Any]:
-    """Merge packaged defaults, packaged CI Gold overlays, then mutable local overrides."""
-    merged = _read_json(base_path)
+    """Merge packaged defaults/overlays, expand groups, then apply mutable overrides."""
+    merged = _expand_source_groups(_read_json(base_path))
     for path in overlay_paths or []:
-        merged = _deep_merge(merged, _read_json(path))
+        merged = _deep_merge(merged, _expand_source_groups(_read_json(path)))
     return _deep_merge(merged, _read_json(overrides_path))
 
 
@@ -57,7 +88,8 @@ class RuntimeControl:
 
     @property
     def overlay_paths(self) -> list[Path]:
-        return [self.settings.ci_gold_runtime_path]
+        paths = getattr(self.settings, "runtime_overlay_paths", None)
+        return list(paths) if paths is not None else [self.settings.ci_gold_runtime_path]
 
     def overrides(self) -> dict[str, Any]:
         return _read_json(self.path)
