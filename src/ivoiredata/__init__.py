@@ -1,2 +1,2 @@
 """IvoireData Engine."""
-__version__ = "0.4.0"
+__version__ = "0.8.3"

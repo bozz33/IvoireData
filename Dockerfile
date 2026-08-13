@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# IvoireData — image locale de production (API + scheduler + moteur CI Gold)
+# IvoireData — image locale de production (API + scheduler + moteur CI Gold + docs officielles)
 ARG PY_VERSION=3.12
 ARG PUID=1000
 ARG PGID=1000
@@ -24,9 +24,9 @@ FROM python:${PY_VERSION}-slim AS runtime
 ARG PUID
 ARG PGID
 LABEL org.opencontainers.image.title="IvoireData" \
-      org.opencontainers.image.description="Moteur local de collecte incrémentale et qualification CI Gold de données Côte d'Ivoire" \
+      org.opencontainers.image.description="Moteur local de collecte incrémentale CI Gold et documentation de programmation officielle" \
       org.opencontainers.image.source="https://github.com/bozz33/IvoireData" \
-      org.opencontainers.image.version="0.8.2" \
+      org.opencontainers.image.version="0.8.3" \
       org.opencontainers.image.licenses="MIT"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
