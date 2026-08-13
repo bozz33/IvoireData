@@ -63,31 +63,44 @@ def _mark_partial_results(engine: IvoireDataEngine, results: list[SyncResult]) -
 
     The data already committed by dlt remains valid and is never rolled back merely
     because another upstream artifact is pending. However, a partial run must not count
-    as a perfect CI Gold automatic cycle.
+    as a perfect CI Gold automatic cycle. The defensive attribute checks intentionally
+    keep this helper compatible with light-weight test/fake results while real engine
+    results remain `SyncResult` instances.
     """
     if not results:
         return results
     quality_rows = {row["source_id"]: row for row in engine.quality_audit()["rows"]}
     for result in results:
-        row = quality_rows.get(result.source_id, {})
+        source_id = getattr(result, "source_id", None)
+        if not source_id:
+            continue
+        row = quality_rows.get(str(source_id), {})
         stats = row.get("upstream_stats") if isinstance(row, dict) else {}
-        if result.status == "success" and _has_pending_upstream(stats if isinstance(stats, dict) else {}):
+        if getattr(result, "status", None) == "success" and _has_pending_upstream(stats if isinstance(stats, dict) else {}):
             result.status = "partial"
-            result.details = (result.details + "\nIvoireData: upstream backlog/partial failure remains; early retry scheduled.").strip()
+            details = str(getattr(result, "details", "") or "")
+            result.details = (details + "\nIvoireData: upstream backlog/partial failure remains; early retry scheduled.").strip()
     return results
 
 
 def _automatic_cycle(engine: IvoireDataEngine) -> list[SyncResult]:
     results = engine.sync_due(auto_only=True, public_only=True)
-    attempted = {result.source_id for result in results}
+    attempted = {
+        str(source_id)
+        for result in results
+        if (source_id := getattr(result, "source_id", None))
+    }
 
     # Retry previous partial structured sources on a short cadence without forcing a
     # redownload. Connectors consult their official version/signature cache and only
     # transfer missing/changed artifacts.
-    for source_id in _pending_retry_ids(engine, attempted):
-        results.append(engine.sync(source_id, force=False))
+    if hasattr(engine, "registry") and hasattr(engine, "quality_audit") and hasattr(engine, "freshness"):
+        for source_id in _pending_retry_ids(engine, attempted):
+            results.append(engine.sync(source_id, force=False))
 
-    return _mark_partial_results(engine, results)
+    if hasattr(engine, "quality_audit"):
+        return _mark_partial_results(engine, results)
+    return results
 
 
 def run_once():
