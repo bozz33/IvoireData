@@ -10,6 +10,7 @@ from .connectors.faostat import CATALOG_URL as FAOSTAT_CATALOG_URL, faostat_coun
 from .connectors.geoboundaries import geoboundaries_resource
 from .connectors.http_file import http_file_resource
 from .connectors.ilostat import DATA_API as ILOSTAT_DATA_API, ilostat_ref_area_resource
+from .connectors.official_docs import official_docs_resource
 from .connectors.osm_geofabrik import geofabrik_snapshot_resource
 from .connectors.public_web import public_document_resource
 from .connectors.uis import uis_country_resource
@@ -40,7 +41,8 @@ class IvoireDataEngine:
             self.settings.registry_path,
             self.settings.runtime_config_path,
             self.settings.runtime_overrides_path,
-            [self.settings.ci_gold_runtime_path],
+            self.settings.runtime_overlay_paths,
+            self.settings.registry_overlay_paths,
         )
         self.freshness = FreshnessStore(self.settings.state_dir / "freshness.json")
         self.qualification = QualificationStore(self.settings.qualification_path)
@@ -151,6 +153,45 @@ class IvoireDataEngine:
                 download_patterns=list(o.get("download_patterns", [])),
                 max_downloads=int(o.get("max_downloads", 0)),
                 max_bytes=int(o.get("max_bytes", 250_000_000)),
+            )
+        if spec.connector == "official_docs":
+            dev_meta = dict(meta)
+            dev_meta.update({
+                "country_code": "GLOBAL",
+                "country_name": "Global",
+                "geographic_scope": "GLOBAL",
+                "primary_domain": "software_development",
+                "language": str(o.get("language") or "en"),
+                "document_type": "DEVELOPER_DOCUMENTATION",
+                "corpus_scope": str(o.get("corpus_scope") or "PROGRAMMING_DOCUMENTATION"),
+                "programming_language": str(o.get("programming_language") or "General"),
+                "version_policy": str(o.get("version_policy") or "CURRENT_STABLE"),
+                "training_eligible": bool(o.get("training_eligible", False)),
+                "license_review_status": str(o.get("license_review_status") or "UNREVIEWED"),
+            })
+            for key in ("framework", "runtime", "library", "tool", "ecosystem", "doc_version", "license_name", "license_url"):
+                if o.get(key) is not None:
+                    dev_meta[key] = o.get(key)
+            return official_docs_resource(
+                source_id=spec.source_id,
+                url=spec.source_url,
+                user_agent=self.settings.user_agent,
+                discovery_urls=list(o.get("discovery_urls", [])),
+                include_prefixes=list(o.get("include_prefixes", [])),
+                exclude_patterns=list(o.get("exclude_patterns", [])),
+                max_pages=int(o.get("max_pages", 100_000)),
+                max_sitemaps=int(o.get("max_sitemaps", 1_000)),
+                max_bytes_per_page=int(o.get("max_bytes_per_page", 12_000_000)),
+                max_new_bytes_per_run=int(o.get("max_new_bytes_per_run", 500_000_000)),
+                request_pause_seconds=float(o.get("request_pause_seconds", 0.02)),
+                allow_crawl_fallback=bool(o.get("allow_crawl_fallback", True)),
+                snapshot_dir=p["raw"],
+                metadata_base=dev_meta,
+                upstream_state_path=upstream_state_path,
+                license_name=o.get("license_name"),
+                license_url=o.get("license_url"),
+                training_eligible=bool(o.get("training_eligible", False)),
+                license_review_status=str(o.get("license_review_status") or "UNREVIEWED"),
             )
         if spec.connector == "public_web":
             return public_document_resource(
@@ -284,10 +325,12 @@ class IvoireDataEngine:
         }
 
     def qualification_baseline(self) -> list[str]:
-        """Return AUTO sources that are clean and fresh at qualification start."""
+        """Return clean/fresh Côte d'Ivoire AUTO sources at qualification start."""
         audit_map = {row["source_id"]: row for row in self.audit(public_only=True)["rows"]}
         baseline: list[str] = []
         for spec in self.registry.list(public_only=True, auto_only=True):
+            if spec.connector == "official_docs":
+                continue
             row = audit_map.get(spec.source_id, {})
             if (
                 row.get("sync_status") == "SUCCESS"
@@ -311,7 +354,7 @@ class IvoireDataEngine:
             by_connector[spec.connector] = by_connector.get(spec.connector, 0) + 1
             by_domain[spec.domain] = by_domain.get(spec.domain, 0) + 1
         return {
-            "country_code": "CIV",
+            "scope": "CIV_PLUS_GLOBAL_PROGRAMMING_DOCS",
             "sources_registry": len(all_specs),
             "sources_enabled": len(specs),
             "sources_disabled": sum(1 for s in all_specs if not s.enabled),
