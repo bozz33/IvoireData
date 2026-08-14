@@ -84,10 +84,9 @@ def official_git_docs_resource(
 ):
     """Materialize official documentation from a GitHub repository incrementally.
 
-    Only the branch metadata and, when the commit changed, the recursive Git tree are
-    requested on every run. Document bodies are downloaded only when their Git blob SHA
-    is new or changed. This avoids HTML rendering noise and makes unchanged runs close to
-    zero-transfer while remaining crash-safe through UpstreamState snapshots.
+    Only branch metadata and, when the commit changed, the recursive Git tree are
+    requested on every run. Document bodies are fetched only when their Git blob SHA is
+    new or changed. A stable commit therefore performs zero document-body downloads.
     """
     import dlt
     import requests
@@ -157,6 +156,8 @@ def official_git_docs_resource(
             "business_chunks": 0,
             "chunks_created": 0,
             "chunks_reused": 0,
+            "body_requests_avoided": 0,
+            "incremental_efficiency": 0.0,
             "failures": [],
             "license_name": license_name,
             "license_url": license_url,
@@ -164,13 +165,16 @@ def official_git_docs_resource(
             "training_eligible": bool(training_eligible),
         }
 
-        # A stable branch commit means the entire documentation tree is unchanged.
-        # No recursive tree request and no document body request are needed.
+        # One small branch request is enough when the canonical documentation commit is
+        # unchanged. No recursive tree and no document-body request is made.
         if last_complete_commit == commit and materialized:
             stats["discovered_pages"] = len(materialized)
             stats["selected_pages"] = len(materialized)
             stats["unchanged_git"] = len(materialized)
+            stats["body_requests_avoided"] = len(materialized)
             stats["chunks_reused"] = sum(int(value or 0) for value in chunk_counts.values())
+            stats["business_chunks"] = stats["chunks_reused"]
+            stats["incremental_efficiency"] = 100.0
             for path, blob_sha in materialized.items():
                 if upstream:
                     upstream.mark_unchanged(
@@ -215,7 +219,7 @@ def official_git_docs_resource(
             stats["removed_upstream"] = len(removed)
             for path in removed:
                 page_url = f"https://github.com/{owner_repo}/blob/{commit}/{path}"
-                page_id = hashlib.sha256(f"{source_id}|page|{page_url}".encode()).hexdigest()
+                page_id = hashlib.sha256(f"{source_id}|page|{path}".encode()).hexdigest()
                 yield dlt.mark.with_table_name(
                     {
                         "record_id": page_id,
@@ -244,6 +248,7 @@ def official_git_docs_resource(
             previous_blob = str(materialized.get(path) or "")
             if previous_blob == blob_sha:
                 stats["unchanged_git"] += 1
+                stats["body_requests_avoided"] += 1
                 stats["chunks_reused"] += int(chunk_counts.get(path) or 0)
                 if upstream:
                     upstream.mark_unchanged(
@@ -265,7 +270,6 @@ def official_git_docs_resource(
 
             artifact = f"git:{path}"
             cached = upstream.cached_path(source_id, artifact, signature=blob_sha) if upstream else None
-            raw: bytes
             local: Path | None = None
             replayed = False
             try:
@@ -379,7 +383,6 @@ def official_git_docs_resource(
                             "official_docs_chunks",
                         )
                     chunk_counts[path] = emitted
-                    stats["business_chunks"] += emitted
                     stats["chunks_created"] += emitted
 
                 materialized[path] = blob_sha
@@ -415,6 +418,9 @@ def official_git_docs_resource(
         stats["backlog_count"] = stats["failed"] + stats["deferred_budget"] + stats["skipped_oversize"] + int(not stats["discovery_complete"])
         if stats["backlog_count"] == 0:
             state["git_last_complete_commit_v1"] = commit
+        stats["business_chunks"] = sum(int(chunk_counts.get(path) or 0) for path in current_paths if path in materialized)
+        selected = int(stats["selected_pages"] or 0)
+        stats["incremental_efficiency"] = round((int(stats["body_requests_avoided"] or 0) / selected) * 100, 2) if selected else 0.0
         if snapshot_dir:
             atomic_write_json(snapshot_dir / "official_docs_sync_stats.json", stats)
         rid = hashlib.sha256(f"{source_id}|official-docs-stats".encode()).hexdigest()
