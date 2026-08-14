@@ -10,8 +10,6 @@ from .models import SourceSpec
 COUNTRY_CODE = "CIV"
 COUNTRY_NAME = "Côte d'Ivoire"
 
-# Conservative deterministic taxonomy. Source-level domains remain authoritative for
-# specialist sources; these rules mainly disambiguate multidomain portals/datasets.
 _DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
     "health": ("santé", "sanitaire", "hôpital", "hopital", "médec", "maladie", "vaccin", "mortalité"),
     "education": ("éducation", "education", "école", "ecole", "élève", "eleve", "bac", "scolaire", "enseignant"),
@@ -130,7 +128,7 @@ def source_metadata(spec: SourceSpec) -> dict[str, Any]:
     if not isinstance(secondary, list):
         secondary = [str(secondary)]
     confidence = 1.0 if primary != "multidomain" else 0.50
-    return {
+    payload: dict[str, Any] = {
         "country_code": str(options.get("country_code") or COUNTRY_CODE),
         "country_name": str(options.get("country_name") or COUNTRY_NAME),
         "source_id": spec.source_id,
@@ -146,6 +144,15 @@ def source_metadata(spec: SourceSpec) -> dict[str, Any]:
         "classification_status": "CONFIGURED" if primary != "multidomain" else "PARTIAL",
         "classification_confidence": confidence,
     }
+    if spec.connector == "official_docs":
+        for key in (
+            "source_strategy", "public_docs_url", "version_repository", "version_ref_strategy",
+            "canonical_repository", "version_policy", "doc_version", "programming_language",
+            "framework", "runtime", "library", "tool", "ecosystem", "corpus_scope",
+        ):
+            if options.get(key) is not None:
+                payload[key] = options.get(key)
+    return payload
 
 
 def classify_from_base(base: dict[str, Any], url: str, text: str, *, document_type: str | None = None) -> dict[str, Any]:
