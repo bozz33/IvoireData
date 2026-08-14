@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "source_groups": {
     "programming_docs": {
       "defaults": {
@@ -10,6 +10,7 @@
         "options": {
           "corpus_scope": "PROGRAMMING_DOCUMENTATION",
           "version_policy": "CURRENT_STABLE",
+          "source_strategy": "AUTO",
           "max_pages": 100000,
           "max_sitemaps": 1000,
           "max_bytes_per_page": 12000000,
@@ -23,10 +24,15 @@
         "prog_python_fastapi": {"options":{"programming_language":"Python","framework":"FastAPI"}},
         "prog_python_flask": {"options":{"programming_language":"Python","framework":"Flask"}},
         "prog_php_core": {"options":{"programming_language":"PHP","runtime":"PHP","include_prefixes":["/manual/en/"],"license_name":"CC BY 3.0"}},
-        "prog_php_laravel": {"options":{"programming_language":"PHP","framework":"Laravel","doc_version":"13.x","source_strategy":"OFFICIAL_GIT","public_docs_url":"https://laravel.com/docs/13.x","include_prefixes":[]}},
+        "prog_php_laravel": {"options":{"programming_language":"PHP","framework":"Laravel","doc_version":"13.x","source_strategy":"OFFICIAL_GIT","public_docs_url":"https://laravel.com/docs/13.x","version_repository":"laravel/framework","include_prefixes":[]}},
         "prog_php_filament": {"options":{"programming_language":"PHP","framework":"Filament","doc_version":"5.x","source_strategy":"OFFICIAL_GIT","public_docs_url":"https://filamentphp.com/docs/5.x/","include_prefixes":["docs/","packages/"],"exclude_patterns":["^packages/(?![^/]+/docs/)"]}},
+        "prog_php_livewire": {"options":{"programming_language":"PHP","framework":"Livewire","doc_version":"4.x","source_strategy":"OFFICIAL_GIT","public_docs_url":"https://livewire.laravel.com/docs/4.x/quickstart","include_prefixes":["docs/"]}},
+        "prog_php_pest": {"options":{"programming_language":"PHP","tool":"Pest","doc_version":"5.x","source_strategy":"OFFICIAL_GIT","public_docs_url":"https://pestphp.com/docs/installation","version_repository":"pestphp/pest","include_prefixes":[],"exclude_patterns":["^(CLAUDE|LICENSE|README|agent)\\.md$"]}},
+        "prog_php_phpunit": {"options":{"programming_language":"PHP","tool":"PHPUnit","doc_version":"13.3","source_strategy":"OFFICIAL_GIT","public_docs_url":"https://docs.phpunit.de/en/13.3/","version_repository":"sebastianbergmann/phpunit","include_prefixes":["src/"]}},
         "prog_php_symfony": {"options":{"programming_language":"PHP","framework":"Symfony","include_prefixes":["/doc/current/"],"license_name":"CC BY-SA 3.0"}},
         "prog_php_composer": {"options":{"programming_language":"PHP","tool":"Composer","include_prefixes":["/doc/"]}},
+        "prog_css_tailwind": {"options":{"programming_language":"CSS","framework":"Tailwind CSS","doc_version":"4.x","source_strategy":"OFFICIAL_GIT","public_docs_url":"https://tailwindcss.com/docs","version_repository":"tailwindlabs/tailwindcss","include_prefixes":["src/docs/"]}},
+        "prog_js_alpine": {"options":{"programming_language":"JavaScript","library":"Alpine.js","doc_version":"3.x","source_strategy":"OFFICIAL_GIT","public_docs_url":"https://alpinejs.dev/start-here","include_prefixes":["packages/docs/src/en/"]}},
         "prog_js_ecmascript": {"options":{"programming_language":"JavaScript","tool":"ECMAScript specification","include_prefixes":["/ecma262/"]}},
         "prog_ts_core": {"options":{"programming_language":"TypeScript","runtime":"TypeScript","include_prefixes":["/docs/"]}},
         "prog_js_node": {"options":{"programming_language":"JavaScript","runtime":"Node.js","include_prefixes":["/api/"]}},
