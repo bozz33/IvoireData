@@ -259,7 +259,11 @@ class IvoireDataEngine:
                 "training_eligible": bool(o.get("training_eligible", False)),
                 "license_review_status": str(o.get("license_review_status") or "UNREVIEWED"),
             })
-            for key in ("framework", "runtime", "library", "tool", "ecosystem", "doc_version", "license_name", "license_url"):
+            for key in (
+                "framework", "runtime", "library", "tool", "ecosystem", "doc_version",
+                "license_name", "license_url", "source_strategy", "public_docs_url",
+                "version_repository", "version_ref_strategy", "canonical_repository",
+            ):
                 if o.get(key) is not None:
                     dev_meta[key] = o.get(key)
             return official_docs_resource(
@@ -390,173 +394,71 @@ class IvoireDataEngine:
             self._catalog()
             return SyncResult(source_id, "error", started, finished, spec.connector, details)
 
-    def sync_due(self, *, auto_only: bool = True, public_only: bool = True, force: bool = False) -> list[SyncResult]:
-        return [self.sync(s.source_id, force=force) for s in self.registry.list(public_only=public_only, auto_only=auto_only) if force or self.freshness.due(s)]
-
-    def upstream_audit(self, source_id: str | None = None) -> dict:
-        if source_id is not None:
-            self.registry.get(source_id)
-            source_ids = [source_id]
-        else:
-            source_ids = [spec.source_id for spec in self.registry.all()]
-        rows = []
-        totals: dict[str, int] = {}
-        for sid in source_ids:
-            artifacts = self.upstreams.source_rows(sid)
-            result_counts: dict[str, int] = {}
-            methods: dict[str, int] = {}
-            downloaded_bytes = 0
-            last_checked = None
-            last_downloaded = None
-            errors = []
-            for item in artifacts:
-                result = str(item.get("last_result") or "UNKNOWN")
-                result_counts[result] = result_counts.get(result, 0) + 1
-                totals[result] = totals.get(result, 0) + 1
-                method = str(item.get("method") or "")
-                if method:
-                    methods[method] = methods.get(method, 0) + 1
-                if item.get("last_result") == "DOWNLOADED":
-                    downloaded_bytes += int(item.get("size_bytes") or 0)
-                checked = item.get("last_checked")
-                downloaded = item.get("last_downloaded")
-                if checked and (last_checked is None or str(checked) > str(last_checked)):
-                    last_checked = checked
-                if downloaded and (last_downloaded is None or str(downloaded) > str(last_downloaded)):
-                    last_downloaded = downloaded
-                if item.get("error"):
-                    errors.append({"artifact_id": item.get("artifact_id"), "error": item.get("error"), "http_status": item.get("http_status")})
-            rows.append({
-                "source_id": sid,
-                "artifacts": len(artifacts),
-                "last_results": dict(sorted(result_counts.items())),
-                "methods": dict(sorted(methods.items())),
-                "cached_bytes": downloaded_bytes,
-                "last_checked": last_checked,
-                "last_downloaded": last_downloaded,
-                "errors": errors[:50],
-            })
-        return {
-            "state_path": str(self.settings.upstream_state_path),
-            "summary": {"sources": len(rows), "artifacts": sum(row["artifacts"] for row in rows), "last_results": dict(sorted(totals.items()))},
-            "rows": rows,
-        }
-
-    def qualification_baseline(self) -> list[str]:
-        audit_map = {row["source_id"]: row for row in self.audit(public_only=True)["rows"]}
-        baseline: list[str] = []
+    def sync_due(self, *, force: bool = False) -> list[SyncResult]:
+        results: list[SyncResult] = []
         for spec in self.registry.list(public_only=True, auto_only=True):
-            if _is_programming_docs(spec):
-                continue
-            row = audit_map.get(spec.source_id, {})
-            if row.get("sync_status") == "SUCCESS" and row.get("delivery_status") != "EMPTY" and row.get("freshness_status") == "FRESH":
-                baseline.append(spec.source_id)
-        return sorted(baseline)
+            if force or self.freshness.due(spec):
+                results.append(self.sync(spec.source_id, force=force))
+        return results
 
-    def start_qualification(self) -> dict:
-        return self.qualification.start(baseline_sources=self.qualification_baseline())
+    def sync_all(self, *, force: bool = False) -> list[SyncResult]:
+        results: list[SyncResult] = []
+        for spec in self.registry.list(public_only=True):
+            if force or self.freshness.due(spec):
+                results.append(self.sync(spec.source_id, force=force))
+        return results
 
-    def coverage(self) -> dict:
-        all_specs = self.registry.all()
-        specs = self.registry.list()
-        public = [s for s in specs if s.public]
-        automatic = [s for s in public if s.auto_sync]
-        by_connector: dict[str, int] = {}
-        by_domain: dict[str, int] = {}
-        for spec in automatic:
-            by_connector[spec.connector] = by_connector.get(spec.connector, 0) + 1
-            by_domain[spec.domain] = by_domain.get(spec.domain, 0) + 1
-        return {
-            "scope": "CIV_PLUS_GLOBAL_PROGRAMMING_DOCS",
-            "sources_registry": len(all_specs),
-            "sources_enabled": len(specs),
-            "sources_disabled": sum(1 for s in all_specs if not s.enabled),
-            "sources_public_syncable": len(public),
-            "sources_auto_sync": len(automatic),
-            "automatic_updates_enabled": self.runtime.automatic_enabled,
-            "scheduler_interval_seconds": self.runtime.scheduler_interval_seconds,
-            "sources_manual_or_controlled": len(specs) - len(automatic),
-            "auto_by_connector": dict(sorted(by_connector.items())),
-            "auto_by_domain": dict(sorted(by_domain.items())),
-        }
-
-    def audit(self, *, public_only: bool = True) -> dict:
+    def audit(self, *, public_only: bool = True) -> dict[str, Any]:
         rows: list[dict[str, Any]] = []
         for spec in self.registry.list(public_only=public_only):
-            manifest_path = source_paths(self.settings, spec)["manifest"]
+            paths = source_paths(self.settings, spec)
+            manifest = load_json(paths["manifest"], {})
             state = self.freshness.data.get(spec.source_id, {})
-            if manifest_path.exists():
-                try:
-                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    manifest = {}
-            else:
-                manifest = {}
-            delivery = manifest.get("delivery", {}) if isinstance(manifest.get("delivery"), dict) else {}
-            sync_status = str(manifest.get("status") or state.get("last_status") or "NEVER").upper()
-            delivery_status = str(delivery.get("status") or manifest.get("delivery_status") or "EMPTY").upper()
-            fresh = self.freshness.status(spec)
-            freshness_status = str(fresh.get("status") or manifest.get("freshness_status") or "UNKNOWN").upper()
-            transport_info = manifest.get("transport", {}) if isinstance(manifest.get("transport"), dict) else {}
-            transfer = str(manifest.get("transport_security") or transport_info.get("security") or "UNKNOWN").upper()
-            rows_count = int(delivery.get("rows") or 0)
-            is_document = spec.connector in {"public_web", "official_docs"}
-            structured = 0 if is_document else rows_count
-            documents = rows_count if is_document else 0
-            metadata = manifest.get("metadata", {}) if isinstance(manifest.get("metadata"), dict) else {}
+            delivery = manifest.get("delivery", {}) if isinstance(manifest, dict) else {}
+            metadata = manifest.get("metadata", {}) if isinstance(manifest, dict) else {}
             rows.append({
                 "source_id": spec.source_id,
-                "title": spec.title,
-                "provider": spec.provider,
-                "domain": spec.domain,
-                "country_code": manifest.get("country_code") or metadata.get("country_code") or ("GLOBAL" if _is_programming_docs(spec) else "CIV"),
-                "priority": spec.priority,
                 "connector": spec.connector,
-                "refresh_hours": spec.refresh_hours,
-                "auto_sync": spec.auto_sync,
-                "sync_status": sync_status,
-                "delivery_status": delivery_status,
-                "freshness_status": freshness_status,
-                "transport": transfer,
-                "transport_security": transfer,
-                "structured_rows": structured,
-                "document_rows": documents,
-                "total_rows": rows_count,
-                "rows": rows_count,
-                "warnings": manifest.get("warnings", []),
-                "last_success": state.get("last_success"),
-                "last_attempt": state.get("last_attempt"),
-                "last_error": state.get("last_error"),
+                "sync_status": str(manifest.get("sync_status") or manifest.get("status") or state.get("last_status") or "NEVER").upper(),
+                "delivery_status": str(delivery.get("status") or "UNKNOWN").upper(),
+                "freshness_status": "DUE" if self.freshness.due(spec) else "FRESH",
+                "transport": str(metadata.get("transport_security") or metadata.get("transport") or "UNKNOWN").upper(),
+                "structured_rows": int(delivery.get("rows", {}).get("structured") or 0) if isinstance(delivery.get("rows"), dict) else 0,
+                "document_rows": int(delivery.get("rows", {}).get("documents") or 0) if isinstance(delivery.get("rows"), dict) else 0,
+                "total_rows": int(delivery.get("rows", {}).get("total") or 0) if isinstance(delivery.get("rows"), dict) else 0,
             })
         return {"summary": _audit_summary(rows), "rows": rows}
+
+    def upstream_audit(self, source_id: str | None = None) -> dict[str, Any]:
+        return self.upstreams.audit(source_id)
+
+    def coverage_audit(self, *, public_only: bool = True) -> dict[str, Any]:
+        from .coverage import coverage_audit
+        return coverage_audit(self._ci_gold_view(), public_only=public_only)
+
+    def quality_audit(self, *, public_only: bool = True) -> dict[str, Any]:
+        from .quality import quality_audit
+        return quality_audit(self._ci_gold_view(), public_only=public_only)
 
     def _ci_gold_view(self) -> _CIGoldEngineView:
         return _CIGoldEngineView(self)
 
-    def coverage_audit(self) -> dict[str, Any]:
-        from .ci_gold import coverage_audit
-        return coverage_audit(self._ci_gold_view())
-
-    def quality_audit(self) -> dict[str, Any]:
-        from .ci_gold import quality_audit
-        return quality_audit(self._ci_gold_view())
-
     def ci_gold(self) -> dict[str, Any]:
-        from .ci_gold import ci_gold_report
-        return ci_gold_report(self._ci_gold_view())
+        from .ci_gold import ci_gold
+        return ci_gold(self._ci_gold_view())
 
     def write_ci_gold(self) -> dict[str, Any]:
-        from .ci_gold import write_ci_gold_report
-        return write_ci_gold_report(self._ci_gold_view())
+        from .ci_gold import write_ci_gold
+        return write_ci_gold(self._ci_gold_view())
 
-    def programming_docs_audit(self) -> dict[str, Any]:
+    def programming_docs_audit(self, *, language: str | None = None) -> dict[str, Any]:
         from .programming_docs import programming_docs_audit
-        return programming_docs_audit(self)
+        return programming_docs_audit(self, language=language)
 
-    def sync_programming_docs(self, *, language: str | None = None, force: bool = False, due_only: bool = False) -> list[SyncResult]:
+    def sync_programming_docs(self, *, language: str | None = None, force: bool = False) -> list[SyncResult]:
         from .programming_docs import sync_programming_docs
-        return sync_programming_docs(self, language=language, force=force, due_only=due_only)
+        return sync_programming_docs(self, language=language, force=force)
 
-    def write_programming_docs_report(self) -> dict[str, Any]:
+    def write_programming_docs_report(self, *, language: str | None = None) -> dict[str, Any]:
         from .programming_docs import write_programming_docs_report
-        return write_programming_docs_report(self)
+        return write_programming_docs_report(self, language=language)
