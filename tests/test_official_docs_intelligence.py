@@ -22,6 +22,7 @@ def test_current_stable_resolution_uses_metadata_not_source_id(monkeypatch):
             "release_url": "https://github.com/acme/runtime/releases/tag/v8.2.1",
         },
     )
+    monkeypatch.setattr(versions, "_ref_exists", lambda repository, ref, user_agent: True)
     called = {}
 
     def fake_git(**kwargs):
@@ -42,6 +43,31 @@ def test_current_stable_resolution_uses_metadata_not_source_id(monkeypatch):
     assert called["repository"] == "acme/docs"
     assert called["ref"] == "8.x"
     assert called["metadata_base"]["detected_doc_version"] == "8.2.1"
+
+
+def test_current_stable_resolution_falls_back_when_docs_ref_not_published(monkeypatch):
+    monkeypatch.setattr(
+        versions,
+        "_latest_stable_release",
+        lambda repository, user_agent: {
+            "tag": "v9.0.0",
+            "published_at": "2026-08-14T00:00:00Z",
+            "release_url": "https://github.com/acme/runtime/releases/tag/v9.0.0",
+        },
+    )
+    monkeypatch.setattr(versions, "_ref_exists", lambda repository, ref, user_agent: False)
+    called = {}
+    monkeypatch.setattr(versions, "_base_git_resource", lambda **kwargs: called.update(kwargs) or "resource")
+    result = versions.resolving_official_git_docs_resource(
+        source_id="prog_future",
+        repository="acme/docs",
+        ref="8.x",
+        metadata_base={"version_policy": "CURRENT_STABLE", "version_repository": "acme/runtime"},
+    )
+    assert result == "resource"
+    assert called["ref"] == "8.x"
+    assert called["metadata_base"]["detected_doc_version"] == "9.0.0"
+    assert called["metadata_base"]["version_resolution_status"] == "FALLBACK_CONFIGURED_REF"
 
 
 def test_auto_strategy_discovers_high_confidence_edit_link(monkeypatch):
