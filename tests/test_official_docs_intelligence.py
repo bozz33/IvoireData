@@ -65,7 +65,7 @@ def test_auto_strategy_discovers_high_confidence_edit_link(monkeypatch):
     assert found is not None
     assert found["repository"] == "acme/framework"
     assert found["ref"] == "4.x"
-    assert found["include_prefix"] == "docs/guide/"
+    assert found["include_prefix"] == "docs/"
 
 
 def test_auto_strategy_rejects_ambiguous_footer_repository(monkeypatch):
@@ -82,3 +82,19 @@ def test_auto_strategy_rejects_ambiguous_footer_repository(monkeypatch):
 
     monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
     assert strategy.discover_official_git_source("https://docs.example.dev/", "test") is None
+
+
+def test_auto_strategy_rejects_source_code_link(monkeypatch):
+    class Response:
+        url = "https://docs.example.dev/api/widget"
+        headers = {"content-type": "text/html"}
+        content = b"<html></html>"
+        text = '<a href="https://github.com/acme/framework/blob/main/src/widget.ts">Source</a>'
+
+        def raise_for_status(self):
+            return None
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response())
+    assert strategy.discover_official_git_source("https://docs.example.dev/api/widget", "test") is None
