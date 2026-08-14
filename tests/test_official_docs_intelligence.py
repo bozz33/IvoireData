@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from ivoiredata.connectors import official_docs_strategy as strategy
 from ivoiredata.connectors import official_git_versions as versions
+from ivoiredata.metadata import source_metadata
+from ivoiredata.models import SourceSpec
 
 
 def test_ref_strategy_is_inferred_without_source_specific_profiles():
@@ -10,6 +12,31 @@ def test_ref_strategy_is_inferred_without_source_specific_profiles():
     assert versions.infer_ref_strategy("13.3") == "minor_branch"
     assert versions.infer_ref_strategy("main") == "fixed_ref"
     assert versions.infer_ref_strategy("v2.4.1") == "release_tag"
+
+
+def test_programming_metadata_propagates_generic_strategy_hints():
+    spec = SourceSpec(
+        source_id="prog_future",
+        title="Future Docs",
+        domain="programming_future",
+        provider="Future",
+        source_url="https://github.com/acme/docs/tree/7.x",
+        rights_tier="C_PUBLIC_LOCAL_INGEST",
+        access_tier="OPEN_PUBLIC",
+        priority="P1",
+        connector="official_docs",
+        options={
+            "programming_language": "FutureLang",
+            "source_strategy": "AUTO",
+            "version_policy": "CURRENT_STABLE",
+            "version_repository": "acme/runtime",
+        },
+    )
+    metadata = source_metadata(spec)
+    assert metadata["source_strategy"] == "AUTO"
+    assert metadata["version_repository"] == "acme/runtime"
+    assert metadata["version_policy"] == "CURRENT_STABLE"
+    assert metadata["programming_language"] == "FutureLang"
 
 
 def test_current_stable_resolution_uses_metadata_not_source_id(monkeypatch):
