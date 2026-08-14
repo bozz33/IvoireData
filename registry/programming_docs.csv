@@ -6,8 +6,13 @@ prog_python_flask,Flask Official Documentation,programming_python,Pallets,https:
 prog_php_core,PHP Manual,programming_php,PHP Documentation Group,https://www.php.net/manual/en/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
 prog_php_laravel,Laravel Official Documentation,programming_php,Laravel,https://github.com/laravel/docs/tree/13.x,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
 prog_php_filament,Filament Official Documentation,programming_php,Filament,https://github.com/filamentphp/filament/tree/5.x,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_php_livewire,Livewire Official Documentation,programming_php,Livewire,https://github.com/livewire/livewire/tree/4.x,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_php_pest,Pest Official Documentation,programming_php,Pest PHP,https://github.com/pestphp/docs/tree/5.x,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_php_phpunit,PHPUnit Official Documentation,programming_php,PHPUnit,https://github.com/sebastianbergmann/phpunit-documentation-english/tree/13.3,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
 prog_php_symfony,Symfony Official Documentation,programming_php,Symfony,https://symfony.com/doc/current/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
 prog_php_composer,Composer Official Documentation,programming_php,Composer,https://getcomposer.org/doc/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_css_tailwind,Tailwind CSS Official Documentation,programming_css,Tailwind Labs,https://github.com/tailwindlabs/tailwindcss.com/tree/main,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_js_alpine,Alpine.js Official Documentation,programming_javascript_typescript,Alpine.js,https://github.com/alpinejs/alpine/tree/main,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
 prog_js_ecmascript,ECMAScript Language Specification,programming_javascript_typescript,TC39,https://tc39.es/ecma262/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
 prog_ts_core,TypeScript Official Documentation,programming_javascript_typescript,Microsoft TypeScript,https://www.typescriptlang.org/docs/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
 prog_js_node,Node.js API Documentation,programming_javascript_typescript,OpenJS Foundation,https://nodejs.org/api/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
