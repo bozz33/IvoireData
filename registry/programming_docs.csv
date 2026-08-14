@@ -4,7 +4,8 @@ prog_python_django,Django Official Documentation,programming_python,Django Softw
 prog_python_fastapi,FastAPI Official Documentation,programming_python,FastAPI,https://fastapi.tiangolo.com/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
 prog_python_flask,Flask Official Documentation,programming_python,Pallets,https://flask.palletsprojects.com/en/stable/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
 prog_php_core,PHP Manual,programming_php,PHP Documentation Group,https://www.php.net/manual/en/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
-prog_php_laravel,Laravel Official Documentation,programming_php,Laravel,https://laravel.com/docs/13.x,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_php_laravel,Laravel Official Documentation,programming_php,Laravel,https://github.com/laravel/docs/tree/13.x,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_php_filament,Filament Official Documentation,programming_php,Filament,https://github.com/filamentphp/filament/tree/5.x,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
 prog_php_symfony,Symfony Official Documentation,programming_php,Symfony,https://symfony.com/doc/current/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
 prog_php_composer,Composer Official Documentation,programming_php,Composer,https://getcomposer.org/doc/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
 prog_js_ecmascript,ECMAScript Language Specification,programming_javascript_typescript,TC39,https://tc39.es/ecma262/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
