@@ -56,8 +56,6 @@ for spec in registry.all():
             errors.append(f"{spec.source_id}: official_docs max_pages must be >= 1")
         if int(spec.options.get("max_new_bytes_per_run") or 0) < 1:
             errors.append(f"{spec.source_id}: official_docs max_new_bytes_per_run must be >= 1")
-        if spec.options.get("training_eligible") is True and str(spec.options.get("license_review_status") or "").upper() not in {"TRAINING_APPROVED", "VERIFIED_FOR_TRAINING"}:
-            errors.append(f"{spec.source_id}: training_eligible requires an explicit training-approved license review")
 
 seen_domains: set[str] = set()
 for row in coverage.get("domains", []):

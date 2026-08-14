@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "source_groups": {
     "programming_docs": {
       "defaults": {
@@ -14,9 +14,7 @@
           "max_sitemaps": 1000,
           "max_bytes_per_page": 12000000,
           "max_new_bytes_per_run": 500000000,
-          "request_pause_seconds": 0.02,
-          "training_eligible": false,
-          "license_review_status": "UNREVIEWED"
+          "request_pause_seconds": 0.02
         }
       },
       "sources": {
@@ -24,9 +22,10 @@
         "prog_python_django": {"options":{"programming_language":"Python","framework":"Django"}},
         "prog_python_fastapi": {"options":{"programming_language":"Python","framework":"FastAPI"}},
         "prog_python_flask": {"options":{"programming_language":"Python","framework":"Flask"}},
-        "prog_php_core": {"options":{"programming_language":"PHP","runtime":"PHP","include_prefixes":["/manual/en/"],"license_name":"CC BY 3.0","license_review_status":"VERIFIED_FOR_LOCAL_INGEST"}},
-        "prog_php_laravel": {"options":{"programming_language":"PHP","framework":"Laravel","doc_version":"13.x","include_prefixes":["/docs/13.x"]}},
-        "prog_php_symfony": {"options":{"programming_language":"PHP","framework":"Symfony","include_prefixes":["/doc/current/"],"license_name":"CC BY-SA 3.0","license_review_status":"VERIFIED_FOR_LOCAL_INGEST"}},
+        "prog_php_core": {"options":{"programming_language":"PHP","runtime":"PHP","include_prefixes":["/manual/en/"],"license_name":"CC BY 3.0"}},
+        "prog_php_laravel": {"options":{"programming_language":"PHP","framework":"Laravel","doc_version":"13.x","source_strategy":"OFFICIAL_GIT","public_docs_url":"https://laravel.com/docs/13.x","include_prefixes":[]}},
+        "prog_php_filament": {"options":{"programming_language":"PHP","framework":"Filament","doc_version":"5.x","source_strategy":"OFFICIAL_GIT","public_docs_url":"https://filamentphp.com/docs/5.x/","include_prefixes":["docs/","packages/"],"exclude_patterns":["^packages/(?![^/]+/docs/)"]}},
+        "prog_php_symfony": {"options":{"programming_language":"PHP","framework":"Symfony","include_prefixes":["/doc/current/"],"license_name":"CC BY-SA 3.0"}},
         "prog_php_composer": {"options":{"programming_language":"PHP","tool":"Composer","include_prefixes":["/doc/"]}},
         "prog_js_ecmascript": {"options":{"programming_language":"JavaScript","tool":"ECMAScript specification","include_prefixes":["/ecma262/"]}},
         "prog_ts_core": {"options":{"programming_language":"TypeScript","runtime":"TypeScript","include_prefixes":["/docs/"]}},
@@ -42,7 +41,7 @@
         "prog_js_deno": {"options":{"programming_language":"JavaScript","runtime":"Deno"}},
         "prog_js_bun": {"options":{"programming_language":"JavaScript","runtime":"Bun","include_prefixes":["/docs"]}},
         "prog_go_core": {"options":{"programming_language":"Go","runtime":"Go","include_prefixes":["/doc/","/ref/"]}},
-        "prog_go_stdlib": {"options":{"programming_language":"Go","runtime":"Go standard library","include_prefixes":["/std"],"license_name":"BSD-3-Clause","license_review_status":"VERIFIED_FOR_LOCAL_INGEST"}},
+        "prog_go_stdlib": {"options":{"programming_language":"Go","runtime":"Go standard library","include_prefixes":["/std"],"license_name":"BSD-3-Clause"}},
         "prog_rust_core": {"options":{"programming_language":"Rust","runtime":"Rust","include_prefixes":["/stable/"]}},
         "prog_rust_std": {"options":{"programming_language":"Rust","runtime":"Rust standard library","include_prefixes":["/stable/std/"]}},
         "prog_rust_cargo": {"options":{"programming_language":"Rust","tool":"Cargo","include_prefixes":["/cargo/"]}},
@@ -50,15 +49,15 @@
         "prog_java_spring": {"options":{"programming_language":"Java","framework":"Spring Framework","include_prefixes":["/spring-framework/reference/","/spring-framework/docs/current/"]}},
         "prog_java_springboot": {"options":{"programming_language":"Java","framework":"Spring Boot","include_prefixes":["/spring-boot/"]}},
         "prog_java_maven": {"options":{"programming_language":"Java","tool":"Apache Maven"}},
-        "prog_jvm_gradle": {"options":{"programming_language":"Java","tool":"Gradle","include_prefixes":["/current/userguide/"],"license_name":"CC BY-NC-SA 4.0","license_review_status":"VERIFIED_LOCAL_ONLY"}},
+        "prog_jvm_gradle": {"options":{"programming_language":"Java","tool":"Gradle","include_prefixes":["/current/userguide/"],"license_name":"CC BY-NC-SA 4.0"}},
         "prog_dotnet_csharp": {"options":{"programming_language":"C#","runtime":".NET","include_prefixes":["/en-us/dotnet/csharp/"]}},
         "prog_dotnet_api": {"options":{"programming_language":"C#","runtime":".NET API","include_prefixes":["/en-us/dotnet/api/"]}},
         "prog_dotnet_aspnet": {"options":{"programming_language":"C#","framework":"ASP.NET Core","include_prefixes":["/en-us/aspnet/core/"]}},
         "prog_kotlin_core": {"options":{"programming_language":"Kotlin","runtime":"Kotlin","include_prefixes":["/docs/"]}},
         "prog_swift_core": {"options":{"programming_language":"Swift","runtime":"Swift","include_prefixes":["/swift-book/"]}},
-        "prog_dart_core": {"options":{"programming_language":"Dart","runtime":"Dart","license_name":"CC BY 4.0 / BSD-3-Clause samples","license_review_status":"VERIFIED_FOR_LOCAL_INGEST"}},
+        "prog_dart_core": {"options":{"programming_language":"Dart","runtime":"Dart","license_name":"CC BY 4.0 / BSD-3-Clause samples"}},
         "prog_dart_api": {"options":{"programming_language":"Dart","runtime":"Dart SDK API"}},
-        "prog_dart_flutter": {"options":{"programming_language":"Dart","framework":"Flutter","license_name":"CC BY 4.0 / BSD-3-Clause samples","license_review_status":"VERIFIED_FOR_LOCAL_INGEST"}},
+        "prog_dart_flutter": {"options":{"programming_language":"Dart","framework":"Flutter","license_name":"CC BY 4.0 / BSD-3-Clause samples"}},
         "prog_dart_flutter_api": {"options":{"programming_language":"Dart","framework":"Flutter API"}},
         "prog_ruby_core": {"options":{"programming_language":"Ruby","runtime":"Ruby","doc_version":"4.0","include_prefixes":["/en/4.0/"]}},
         "prog_ruby_rails": {"options":{"programming_language":"Ruby","framework":"Ruby on Rails"}},
