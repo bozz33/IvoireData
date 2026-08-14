@@ -5,6 +5,8 @@ __version__ = "0.8.3"
 # Load discovery-refresh hardening before engine imports the base connector.
 from .connectors import official_docs_refresh as _official_docs_refresh  # noqa: F401,E402
 
-# Then route canonical GitHub documentation trees through the zero-redownload Git
-# connector while preserving the historical `official_docs` connector interface.
+# Route canonical GitHub documentation trees through the zero-redownload Git connector.
 from .connectors import official_docs_strategy as _official_docs_strategy  # noqa: F401,E402
+
+# Add source-agnostic CURRENT_STABLE resolution for canonical Git documentation.
+from .connectors import official_git_versions as _official_git_versions  # noqa: F401,E402
