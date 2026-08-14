@@ -11,44 +11,8 @@ from . import official_docs_strategy as strategy
 from .official_git_docs import official_git_docs_resource as _base_git_resource
 
 _SEMVER = re.compile(r"^[^0-9]*(\d+)(?:\.(\d+))?(?:\.(\d+))?")
-
-# Initial canonical Git profiles. The resolver is deliberately conservative: when the
-# official release endpoint is unavailable or produces an unusable ref, the configured
-# ref remains the fallback so a version lookup can never make the corpus unavailable.
-_PROFILES: dict[str, dict[str, str]] = {
-    "prog_php_laravel": {
-        "version_repository": "laravel/framework",
-        "ref_strategy": "major_branch",
-    },
-    "prog_php_filament": {
-        "version_repository": "filamentphp/filament",
-        "ref_strategy": "major_branch",
-    },
-    "prog_php_livewire": {
-        "version_repository": "livewire/livewire",
-        "ref_strategy": "major_branch",
-    },
-    "prog_php_pest": {
-        "version_repository": "pestphp/pest",
-        "ref_strategy": "major_branch",
-    },
-    "prog_php_phpunit": {
-        "version_repository": "sebastianbergmann/phpunit",
-        "ref_strategy": "minor_branch",
-    },
-    "prog_css_tailwind": {
-        "version_repository": "tailwindlabs/tailwindcss",
-        "ref_strategy": "fixed_ref",
-    },
-    "prog_js_alpine": {
-        "version_repository": "alpinejs/alpine",
-        "ref_strategy": "fixed_ref",
-    },
-}
-
-
-def version_profile(source_id: str) -> dict[str, str]:
-    return dict(_PROFILES.get(source_id, {}))
+_MAJOR_BRANCH = re.compile(r"^\d+\.x$")
+_MINOR_BRANCH = re.compile(r"^\d+\.\d+$")
 
 
 def _headers(user_agent: str) -> dict[str, str]:
@@ -72,6 +36,25 @@ def _semver_parts(tag: str) -> tuple[int, int | None, int | None] | None:
         int(match.group(2)) if match.group(2) is not None else None,
         int(match.group(3)) if match.group(3) is not None else None,
     )
+
+
+def infer_ref_strategy(configured_ref: str) -> str:
+    """Infer how an upstream release maps to the documentation ref.
+
+    This is intentionally source-agnostic. Explicit metadata can override it for unusual
+    repositories, but the common `13.x`, `5.x`, `13.3`, tag and main-branch layouts need
+    no per-project code.
+    """
+    ref = str(configured_ref or "").strip()
+    if _MAJOR_BRANCH.match(ref):
+        return "major_branch"
+    if _MINOR_BRANCH.match(ref):
+        return "minor_branch"
+    if ref.casefold() in {"main", "master", "stable", "current", "latest"}:
+        return "fixed_ref"
+    if _semver_parts(ref):
+        return "release_tag"
+    return "fixed_ref"
 
 
 def _ref_for_release(configured_ref: str, tag: str, strategy_name: str) -> str:
@@ -126,7 +109,12 @@ def resolving_official_git_docs_resource(
 ):
     base = dict(metadata_base or {})
     policy = str(base.get("version_policy") or "CURRENT_STABLE").upper()
-    profile = version_profile(source_id)
+
+    # Generic defaults: the canonical docs repository also supplies releases. A source
+    # may provide `version_repository` only when its docs live in a separate repository
+    # (for example a dedicated docs repo). This is metadata, not source-specific code.
+    version_repository = str(base.get("version_repository") or repository).strip()
+    ref_strategy = str(base.get("version_ref_strategy") or infer_ref_strategy(ref)).strip()
     resolved_ref = ref
     resolution: dict[str, Any] = {
         "source_id": source_id,
@@ -134,8 +122,8 @@ def resolving_official_git_docs_resource(
         "canonical_repository": repository,
         "configured_ref": ref,
         "resolved_ref": ref,
-        "version_repository": profile.get("version_repository"),
-        "ref_strategy": profile.get("ref_strategy"),
+        "version_repository": version_repository,
+        "ref_strategy": ref_strategy,
         "detected_version": None,
         "detected_release": None,
         "version_changed": False,
@@ -143,11 +131,11 @@ def resolving_official_git_docs_resource(
         "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     }
 
-    if policy == "CURRENT_STABLE" and profile.get("version_repository"):
+    if policy == "CURRENT_STABLE" and version_repository:
         try:
-            release = _latest_stable_release(profile["version_repository"], user_agent)
+            release = _latest_stable_release(version_repository, user_agent)
             if release:
-                candidate = _ref_for_release(ref, str(release["tag"]), profile.get("ref_strategy", "fixed_ref"))
+                candidate = _ref_for_release(ref, str(release["tag"]), ref_strategy)
                 resolved_ref = candidate or ref
                 resolution.update({
                     "resolved_ref": resolved_ref,
@@ -157,6 +145,8 @@ def resolving_official_git_docs_resource(
                     "version_changed": resolved_ref != ref,
                     "status": "RESOLVED_CURRENT_STABLE",
                 })
+            else:
+                resolution["status"] = "NO_RELEASE_METADATA_USE_CONFIGURED_REF"
         except Exception as exc:
             resolution.update({
                 "status": "FALLBACK_CONFIGURED_REF",
@@ -181,9 +171,9 @@ def resolving_official_git_docs_resource(
             **kwargs,
         )
     except Exception:
-        # Resolution is an optimization/automation layer, never a hard dependency. If a
-        # newly inferred branch is not yet published in the documentation repository,
-        # retry with the configured ref rather than failing the source.
+        # Automatic intelligence must degrade safely. If a detected stable ref does not
+        # exist yet in the docs repository, retry the configured ref instead of breaking
+        # ingestion. Overrides remain possible, but are never mandatory for normal repos.
         if resolved_ref != ref:
             resolution.update({
                 "resolved_ref": ref,
