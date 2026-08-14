@@ -14,3 +14,5 @@ jobs:
       - run: python -m compileall -q src scripts
       - run: pytest -q
       - run: ivoiredata --help
+      - run: ivoiredata programming-docs languages
+      - run: ivoiredata programming-docs audit

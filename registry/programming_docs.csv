@@ -1,0 +1,57 @@
+source_id,title,domain,provider,source_url,rights_tier,access_tier,priority
+prog_python_core,Python Official Documentation,programming_python,Python Software Foundation,https://docs.python.org/3/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_python_django,Django Official Documentation,programming_python,Django Software Foundation,https://docs.djangoproject.com/en/stable/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_python_fastapi,FastAPI Official Documentation,programming_python,FastAPI,https://fastapi.tiangolo.com/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_python_flask,Flask Official Documentation,programming_python,Pallets,https://flask.palletsprojects.com/en/stable/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_php_core,PHP Manual,programming_php,PHP Documentation Group,https://www.php.net/manual/en/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_php_laravel,Laravel Official Documentation,programming_php,Laravel,https://laravel.com/docs/13.x,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_php_symfony,Symfony Official Documentation,programming_php,Symfony,https://symfony.com/doc/current/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_php_composer,Composer Official Documentation,programming_php,Composer,https://getcomposer.org/doc/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_js_ecmascript,ECMAScript Language Specification,programming_javascript_typescript,TC39,https://tc39.es/ecma262/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_ts_core,TypeScript Official Documentation,programming_javascript_typescript,Microsoft TypeScript,https://www.typescriptlang.org/docs/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_js_node,Node.js API Documentation,programming_javascript_typescript,OpenJS Foundation,https://nodejs.org/api/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_js_react,React Official Documentation,programming_javascript_typescript,React,https://react.dev/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_js_next,Next.js Official Documentation,programming_javascript_typescript,Vercel,https://nextjs.org/docs,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_ts_nest,NestJS Official Documentation,programming_javascript_typescript,NestJS,https://docs.nestjs.com/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_js_vue,Vue.js Official Documentation,programming_javascript_typescript,Vue.js,https://vuejs.org/guide/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_js_nuxt,Nuxt Official Documentation,programming_javascript_typescript,Nuxt,https://nuxt.com/docs/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_ts_angular,Angular Official Documentation,programming_javascript_typescript,Google Angular,https://angular.dev/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_js_svelte,Svelte Official Documentation,programming_javascript_typescript,Svelte,https://svelte.dev/docs,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_js_express,Express Official Documentation,programming_javascript_typescript,OpenJS Foundation,https://expressjs.com/en/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_js_deno,Deno Official Documentation,programming_javascript_typescript,Deno,https://docs.deno.com/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_js_bun,Bun Official Documentation,programming_javascript_typescript,oven-sh,https://bun.sh/docs,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_go_core,Go Official Documentation,programming_go,Go Project,https://go.dev/doc/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_go_stdlib,Go Standard Library Documentation,programming_go,Go Project,https://pkg.go.dev/std,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_rust_core,Rust Stable Documentation,programming_rust,Rust Project,https://doc.rust-lang.org/stable/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_rust_std,Rust Standard Library,programming_rust,Rust Project,https://doc.rust-lang.org/stable/std/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_rust_cargo,Cargo Book and Reference,programming_rust,Rust Project,https://doc.rust-lang.org/cargo/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_java_core,JDK 26 Official Documentation,programming_java,Oracle,https://docs.oracle.com/en/java/javase/26/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_java_spring,Spring Framework Official Documentation,programming_java,VMware Spring,https://docs.spring.io/spring-framework/reference/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_java_springboot,Spring Boot Official Documentation,programming_java,VMware Spring,https://docs.spring.io/spring-boot/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_java_maven,Apache Maven Official Documentation,programming_java,Apache Software Foundation,https://maven.apache.org/guides/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_jvm_gradle,Gradle Official User Manual,programming_java,Gradle,https://docs.gradle.org/current/userguide/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_dotnet_csharp,C# Official Documentation,programming_csharp_dotnet,Microsoft,https://learn.microsoft.com/en-us/dotnet/csharp/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_dotnet_api,.NET API Documentation,programming_csharp_dotnet,Microsoft,https://learn.microsoft.com/en-us/dotnet/api/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_dotnet_aspnet,ASP.NET Core Official Documentation,programming_csharp_dotnet,Microsoft,https://learn.microsoft.com/en-us/aspnet/core/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_kotlin_core,Kotlin Official Documentation,programming_kotlin,JetBrains,https://kotlinlang.org/docs/home.html,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_swift_core,The Swift Programming Language,programming_swift,Swift Project,https://docs.swift.org/swift-book/documentation/the-swift-programming-language/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_dart_core,Dart Official Documentation,programming_dart,Dart Project,https://dart.dev/docs,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_dart_api,Dart API Reference,programming_dart,Dart Project,https://api.dart.dev/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_dart_flutter,Flutter Official Documentation,programming_dart,Flutter Project,https://docs.flutter.dev/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_dart_flutter_api,Flutter API Reference,programming_dart,Flutter Project,https://api.flutter.dev/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_ruby_core,Ruby Official Documentation,programming_ruby,Ruby Project,https://docs.ruby-lang.org/en/4.0/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_ruby_rails,Ruby on Rails Official Guides,programming_ruby,Ruby on Rails,https://guides.rubyonrails.org/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_scala_core,Scala Official Documentation,programming_scala,Scala Center,https://docs.scala-lang.org/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_elixir_core,Elixir Official Documentation,programming_elixir,Elixir,https://hexdocs.pm/elixir/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_elixir_phoenix,Phoenix Framework Official Documentation,programming_elixir,Phoenix,https://hexdocs.pm/phoenix/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
+prog_erlang_core,Erlang OTP Official Documentation,programming_erlang,Erlang OTP,https://www.erlang.org/doc/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_clojure_core,Clojure Official Reference,programming_clojure,Clojure,https://clojure.org/reference/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_julia_core,Julia Official Documentation,programming_julia,Julia Project,https://docs.julialang.org/en/v1/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_r_core,R Official Manuals,programming_r,R Project,https://cran.r-project.org/doc/manuals/r-release/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_lua_core,Lua 5.4 Reference Manual,programming_lua,Lua.org,https://www.lua.org/manual/5.4/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_perl_core,Perl Official Documentation,programming_perl,Perl,https://perldoc.perl.org/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_bash_core,GNU Bash Reference Manual,programming_shell,GNU Project,https://www.gnu.org/software/bash/manual/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_powershell_core,PowerShell Official Documentation,programming_powershell,Microsoft,https://learn.microsoft.com/en-us/powershell/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_groovy_core,Apache Groovy Documentation,programming_groovy,Apache Software Foundation,https://groovy-lang.org/documentation.html,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_c_cpp_gcc,GCC Official Manuals for C and C++,programming_c_cpp,GNU Project,https://gcc.gnu.org/onlinedocs/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P1
+prog_c_cpp_llvm,LLVM Official Documentation,programming_c_cpp,LLVM Project,https://llvm.org/docs/,C_PUBLIC_LOCAL_INGEST,OPEN_PUBLIC,P2
