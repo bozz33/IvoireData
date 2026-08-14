@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from ..state_io import atomic_write_json
 from . import official_docs_strategy as strategy
@@ -39,12 +40,7 @@ def _semver_parts(tag: str) -> tuple[int, int | None, int | None] | None:
 
 
 def infer_ref_strategy(configured_ref: str) -> str:
-    """Infer how an upstream release maps to the documentation ref.
-
-    This is intentionally source-agnostic. Explicit metadata can override it for unusual
-    repositories, but the common `13.x`, `5.x`, `13.3`, tag and main-branch layouts need
-    no per-project code.
-    """
+    """Infer how a stable release maps to the documentation ref generically."""
     ref = str(configured_ref or "").strip()
     if _MAJOR_BRANCH.match(ref):
         return "major_branch"
@@ -92,6 +88,22 @@ def _latest_stable_release(repository: str, user_agent: str) -> dict[str, Any] |
     }
 
 
+def _ref_exists(repository: str, ref: str, user_agent: str) -> bool:
+    import requests
+
+    encoded = quote(ref, safe="")
+    url = f"https://api.github.com/repos/{repository}/branches/{encoded}"
+    response = requests.get(url, headers=_headers(user_agent), timeout=30)
+    if response.status_code == 404:
+        # Tags are valid canonical refs too.
+        tag_url = f"https://api.github.com/repos/{repository}/git/ref/tags/{encoded}"
+        response = requests.get(tag_url, headers=_headers(user_agent), timeout=30)
+    if response.status_code == 404:
+        return False
+    response.raise_for_status()
+    return True
+
+
 def _write_resolution(snapshot_dir: Path | None, payload: dict[str, Any]) -> None:
     if snapshot_dir is not None:
         atomic_write_json(snapshot_dir / "version_resolution.json", payload)
@@ -109,10 +121,6 @@ def resolving_official_git_docs_resource(
 ):
     base = dict(metadata_base or {})
     policy = str(base.get("version_policy") or "CURRENT_STABLE").upper()
-
-    # Generic defaults: the canonical docs repository also supplies releases. A source
-    # may provide `version_repository` only when its docs live in a separate repository
-    # (for example a dedicated docs repo). This is metadata, not source-specific code.
     version_repository = str(base.get("version_repository") or repository).strip()
     ref_strategy = str(base.get("version_ref_strategy") or infer_ref_strategy(ref)).strip()
     resolved_ref = ref
@@ -135,16 +143,24 @@ def resolving_official_git_docs_resource(
         try:
             release = _latest_stable_release(version_repository, user_agent)
             if release:
-                candidate = _ref_for_release(ref, str(release["tag"]), ref_strategy)
-                resolved_ref = candidate or ref
+                candidate = _ref_for_release(ref, str(release["tag"]), ref_strategy) or ref
+                candidate_available = candidate == ref or _ref_exists(repository, candidate, user_agent)
+                if candidate_available:
+                    resolved_ref = candidate
+                    status = "RESOLVED_CURRENT_STABLE"
+                else:
+                    resolved_ref = ref
+                    status = "FALLBACK_CONFIGURED_REF"
                 resolution.update({
                     "resolved_ref": resolved_ref,
                     "detected_version": str(release["tag"]).lstrip("vV"),
                     "detected_release": release.get("release_url"),
                     "release_published_at": release.get("published_at"),
                     "version_changed": resolved_ref != ref,
-                    "status": "RESOLVED_CURRENT_STABLE",
+                    "status": status,
                 })
+                if not candidate_available:
+                    resolution["fallback_reason"] = "RESOLVED_REF_UNAVAILABLE"
             else:
                 resolution["status"] = "NO_RELEASE_METADATA_USE_CONFIGURED_REF"
         except Exception as exc:
@@ -160,42 +176,15 @@ def resolving_official_git_docs_resource(
     })
     _write_resolution(snapshot_dir, resolution)
 
-    try:
-        return _base_git_resource(
-            source_id=source_id,
-            repository=repository,
-            ref=resolved_ref,
-            user_agent=user_agent,
-            snapshot_dir=snapshot_dir,
-            metadata_base=base,
-            **kwargs,
-        )
-    except Exception:
-        # Automatic intelligence must degrade safely. If a detected stable ref does not
-        # exist yet in the docs repository, retry the configured ref instead of breaking
-        # ingestion. Overrides remain possible, but are never mandatory for normal repos.
-        if resolved_ref != ref:
-            resolution.update({
-                "resolved_ref": ref,
-                "version_changed": False,
-                "status": "FALLBACK_CONFIGURED_REF",
-                "fallback_reason": "RESOLVED_REF_UNAVAILABLE",
-            })
-            _write_resolution(snapshot_dir, resolution)
-            base["resolved_doc_ref"] = ref
-            base["version_resolution_status"] = resolution["status"]
-            return _base_git_resource(
-                source_id=source_id,
-                repository=repository,
-                ref=ref,
-                user_agent=user_agent,
-                snapshot_dir=snapshot_dir,
-                metadata_base=base,
-                **kwargs,
-            )
-        raise
+    return _base_git_resource(
+        source_id=source_id,
+        repository=repository,
+        ref=resolved_ref,
+        user_agent=user_agent,
+        snapshot_dir=snapshot_dir,
+        metadata_base=base,
+        **kwargs,
+    )
 
 
-# official_docs_strategy resolves this global at call time. Replacing it here keeps the
-# historical `official_docs` connector and all existing runtime configuration compatible.
 strategy.official_git_docs_resource = resolving_official_git_docs_resource
