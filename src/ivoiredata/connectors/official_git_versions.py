@@ -1,0 +1,211 @@
+from __future__ import annotations
+
+import os
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from ..state_io import atomic_write_json
+from . import official_docs_strategy as strategy
+from .official_git_docs import official_git_docs_resource as _base_git_resource
+
+_SEMVER = re.compile(r"^[^0-9]*(\d+)(?:\.(\d+))?(?:\.(\d+))?")
+
+# Initial canonical Git profiles. The resolver is deliberately conservative: when the
+# official release endpoint is unavailable or produces an unusable ref, the configured
+# ref remains the fallback so a version lookup can never make the corpus unavailable.
+_PROFILES: dict[str, dict[str, str]] = {
+    "prog_php_laravel": {
+        "version_repository": "laravel/framework",
+        "ref_strategy": "major_branch",
+    },
+    "prog_php_filament": {
+        "version_repository": "filamentphp/filament",
+        "ref_strategy": "major_branch",
+    },
+    "prog_php_livewire": {
+        "version_repository": "livewire/livewire",
+        "ref_strategy": "major_branch",
+    },
+    "prog_php_pest": {
+        "version_repository": "pestphp/pest",
+        "ref_strategy": "major_branch",
+    },
+    "prog_php_phpunit": {
+        "version_repository": "sebastianbergmann/phpunit",
+        "ref_strategy": "minor_branch",
+    },
+    "prog_css_tailwind": {
+        "version_repository": "tailwindlabs/tailwindcss",
+        "ref_strategy": "fixed_ref",
+    },
+    "prog_js_alpine": {
+        "version_repository": "alpinejs/alpine",
+        "ref_strategy": "fixed_ref",
+    },
+}
+
+
+def version_profile(source_id: str) -> dict[str, str]:
+    return dict(_PROFILES.get(source_id, {}))
+
+
+def _headers(user_agent: str) -> dict[str, str]:
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _semver_parts(tag: str) -> tuple[int, int | None, int | None] | None:
+    match = _SEMVER.match((tag or "").strip())
+    if not match:
+        return None
+    return (
+        int(match.group(1)),
+        int(match.group(2)) if match.group(2) is not None else None,
+        int(match.group(3)) if match.group(3) is not None else None,
+    )
+
+
+def _ref_for_release(configured_ref: str, tag: str, strategy_name: str) -> str:
+    parts = _semver_parts(tag)
+    if not parts:
+        return configured_ref
+    major, minor, _patch = parts
+    if strategy_name == "major_branch":
+        return f"{major}.x"
+    if strategy_name == "minor_branch" and minor is not None:
+        return f"{major}.{minor}"
+    if strategy_name == "release_tag":
+        return tag
+    return configured_ref
+
+
+def _latest_stable_release(repository: str, user_agent: str) -> dict[str, Any] | None:
+    import requests
+
+    url = f"https://api.github.com/repos/{repository}/releases/latest"
+    response = requests.get(url, headers=_headers(user_agent), timeout=60)
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or payload.get("draft") or payload.get("prerelease"):
+        return None
+    tag = str(payload.get("tag_name") or "").strip()
+    if not tag or _semver_parts(tag) is None:
+        return None
+    return {
+        "tag": tag,
+        "published_at": payload.get("published_at"),
+        "release_url": payload.get("html_url"),
+    }
+
+
+def _write_resolution(snapshot_dir: Path | None, payload: dict[str, Any]) -> None:
+    if snapshot_dir is not None:
+        atomic_write_json(snapshot_dir / "version_resolution.json", payload)
+
+
+def resolving_official_git_docs_resource(
+    *,
+    source_id: str,
+    repository: str,
+    ref: str,
+    user_agent: str = "IvoireData/0.8.3",
+    snapshot_dir: Path | None = None,
+    metadata_base: dict[str, Any] | None = None,
+    **kwargs: Any,
+):
+    base = dict(metadata_base or {})
+    policy = str(base.get("version_policy") or "CURRENT_STABLE").upper()
+    profile = version_profile(source_id)
+    resolved_ref = ref
+    resolution: dict[str, Any] = {
+        "source_id": source_id,
+        "version_policy": policy,
+        "canonical_repository": repository,
+        "configured_ref": ref,
+        "resolved_ref": ref,
+        "version_repository": profile.get("version_repository"),
+        "ref_strategy": profile.get("ref_strategy"),
+        "detected_version": None,
+        "detected_release": None,
+        "version_changed": False,
+        "status": "CONFIGURED_REF",
+        "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    }
+
+    if policy == "CURRENT_STABLE" and profile.get("version_repository"):
+        try:
+            release = _latest_stable_release(profile["version_repository"], user_agent)
+            if release:
+                candidate = _ref_for_release(ref, str(release["tag"]), profile.get("ref_strategy", "fixed_ref"))
+                resolved_ref = candidate or ref
+                resolution.update({
+                    "resolved_ref": resolved_ref,
+                    "detected_version": str(release["tag"]).lstrip("vV"),
+                    "detected_release": release.get("release_url"),
+                    "release_published_at": release.get("published_at"),
+                    "version_changed": resolved_ref != ref,
+                    "status": "RESOLVED_CURRENT_STABLE",
+                })
+        except Exception as exc:
+            resolution.update({
+                "status": "FALLBACK_CONFIGURED_REF",
+                "error": str(exc)[:1000],
+            })
+
+    base.update({
+        "resolved_doc_ref": resolved_ref,
+        "detected_doc_version": resolution.get("detected_version") or base.get("doc_version"),
+        "version_resolution_status": resolution["status"],
+    })
+    _write_resolution(snapshot_dir, resolution)
+
+    try:
+        return _base_git_resource(
+            source_id=source_id,
+            repository=repository,
+            ref=resolved_ref,
+            user_agent=user_agent,
+            snapshot_dir=snapshot_dir,
+            metadata_base=base,
+            **kwargs,
+        )
+    except Exception:
+        # Resolution is an optimization/automation layer, never a hard dependency. If a
+        # newly inferred branch is not yet published in the documentation repository,
+        # retry with the configured ref rather than failing the source.
+        if resolved_ref != ref:
+            resolution.update({
+                "resolved_ref": ref,
+                "version_changed": False,
+                "status": "FALLBACK_CONFIGURED_REF",
+                "fallback_reason": "RESOLVED_REF_UNAVAILABLE",
+            })
+            _write_resolution(snapshot_dir, resolution)
+            base["resolved_doc_ref"] = ref
+            base["version_resolution_status"] = resolution["status"]
+            return _base_git_resource(
+                source_id=source_id,
+                repository=repository,
+                ref=ref,
+                user_agent=user_agent,
+                snapshot_dir=snapshot_dir,
+                metadata_base=base,
+                **kwargs,
+            )
+        raise
+
+
+# official_docs_strategy resolves this global at call time. Replacing it here keeps the
+# historical `official_docs` connector and all existing runtime configuration compatible.
+strategy.official_git_docs_resource = resolving_official_git_docs_resource
