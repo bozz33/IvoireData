@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from html.parser import HTMLParser
-from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -10,6 +9,8 @@ from . import official_docs as base
 from .official_git_docs import official_git_docs_resource, parse_github_tree_url
 
 _original_official_docs_resource = base.official_docs_resource
+_DOC_EXTENSIONS = {".md", ".mdx", ".markdown", ".rst", ".adoc", ".asciidoc", ".txt"}
+_DOC_MARKERS = {"docs", "documentation", "guide", "guides", "manual", "reference"}
 
 
 class _GitLinkParser(HTMLParser):
@@ -39,6 +40,17 @@ class _GitLinkParser(HTMLParser):
             self._text = []
 
 
+def _doc_like_path(path: str) -> bool:
+    clean = str(path or "").strip("/")
+    if not clean:
+        return False
+    parts = [part.casefold() for part in clean.split("/") if part]
+    if any(part in _DOC_MARKERS for part in parts):
+        return True
+    suffix = "." + clean.rsplit(".", 1)[-1].casefold() if "." in clean.rsplit("/", 1)[-1] else ""
+    return suffix in _DOC_EXTENSIONS
+
+
 def _github_candidate(url: str, anchor_text: str = "") -> dict[str, Any] | None:
     parsed = urlparse(url)
     if (parsed.hostname or "").casefold() not in {"github.com", "www.github.com"}:
@@ -47,8 +59,6 @@ def _github_candidate(url: str, anchor_text: str = "") -> dict[str, Any] | None:
     if len(parts) < 2:
         return None
     owner, repo = parts[0], parts[1]
-    if repo.casefold() in {"issues", "pulls", "discussions"}:
-        return None
 
     action = parts[2] if len(parts) > 2 else ""
     ref = parts[3] if len(parts) > 3 and action in {"tree", "blob", "edit"} else None
@@ -62,10 +72,16 @@ def _github_candidate(url: str, anchor_text: str = "") -> dict[str, Any] | None:
         score += 65
 
     label = anchor_text.casefold()
-    if any(token in label for token in ("edit this page", "edit page", "source", "github", "repository", "repo")):
-        score += 25
-    if any(token in path.casefold() for token in ("docs/", "documentation/", "guide/", "manual/", "reference/")):
+    if any(token in label for token in ("edit this page", "edit page", "documentation source", "docs source")):
+        score += 35
+    elif any(token in label for token in ("source", "github", "repository", "repo")):
         score += 15
+
+    doc_like = _doc_like_path(path)
+    if doc_like:
+        score += 25
+    elif action in {"blob", "edit", "tree"}:
+        score -= 45
 
     return {
         "repository": f"{owner}/{repo}",
@@ -73,6 +89,7 @@ def _github_candidate(url: str, anchor_text: str = "") -> dict[str, Any] | None:
         "path": path,
         "action": action or "repository",
         "score": score,
+        "doc_like": doc_like,
         "url": url,
         "anchor_text": anchor_text,
     }
@@ -82,21 +99,23 @@ def _prefix_from_candidate(candidate: dict[str, Any]) -> str | None:
     path = str(candidate.get("path") or "").strip("/")
     if not path:
         return None
-    action = str(candidate.get("action") or "")
-    if action == "tree":
+    parts = [part for part in path.split("/") if part]
+    for index, part in enumerate(parts):
+        if part.casefold() in _DOC_MARKERS:
+            return "/".join(parts[: index + 1]) + "/"
+    if str(candidate.get("action") or "") == "tree":
         return path.rstrip("/") + "/"
-    parent = str(PurePosixPath(path).parent)
-    if parent and parent != ".":
-        return parent.rstrip("/") + "/"
+    if len(parts) > 1 and _doc_like_path(path):
+        return "/".join(parts[:-1]) + "/"
     return None
 
 
 def discover_official_git_source(url: str, user_agent: str) -> dict[str, Any] | None:
     """Discover a strong canonical GitHub documentation link from an official page.
 
-    Only high-confidence source/edit links are accepted automatically. A plain GitHub
-    link in a footer is intentionally not enough: ambiguity falls back to the existing
-    llms/sitemap/HTML connector instead of guessing a third-party repository.
+    Only high-confidence documentation source/edit links are accepted automatically. A
+    generic GitHub footer link or a source-code link is not enough; ambiguity falls back
+    to llms/sitemap/HTML instead of guessing.
     """
     import requests
 
@@ -124,7 +143,7 @@ def discover_official_git_source(url: str, user_agent: str) -> dict[str, Any] | 
 
     candidates.sort(key=lambda item: (int(item["score"]), bool(item.get("ref")), len(str(item.get("path") or ""))), reverse=True)
     winner = candidates[0]
-    if int(winner["score"]) < 75 or not winner.get("ref"):
+    if int(winner["score"]) < 80 or not winner.get("ref") or not winner.get("doc_like"):
         return None
     winner = dict(winner)
     winner["include_prefix"] = _prefix_from_candidate(winner)
@@ -225,6 +244,4 @@ def official_docs_resource(*, source_id: str, url: str, **kwargs):
     return _original_official_docs_resource(source_id=source_id, url=url, **kwargs)
 
 
-# Engine imports official_docs_resource from the base module only after package __init__
-# runs. Patch the exported function once so existing connector names/config remain stable.
 base.official_docs_resource = official_docs_resource
