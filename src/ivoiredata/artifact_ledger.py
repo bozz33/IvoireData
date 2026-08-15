@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 PHYSICAL_STATUSES = {"FETCHED", "VERIFIED", "UNCHANGED"}
 REPAIRABLE_STATUSES = {"LOCAL_MISSING", "CORRUPTED", "FAILED"}
 TERMINAL_NON_PHYSICAL = {"REMOVED", "DELETED", "EMPTY_VALID", "UPSTREAM_GHOST"}
@@ -143,6 +144,29 @@ class ArtifactLedger:
             self.db.execute("UPDATE artifacts SET status='FETCHED' WHERE status='VERIFIED'")
             version = 2
 
+        if version < 3:
+            run_columns = {
+                str(item["name"])
+                for item in self.db.execute("PRAGMA table_info(runs)").fetchall()
+            }
+            additions = {
+                "http_requests": "INTEGER NOT NULL DEFAULT 0",
+                "http_attempts": "INTEGER NOT NULL DEFAULT 0",
+                "http_retries": "INTEGER NOT NULL DEFAULT 0",
+                "http_304": "INTEGER NOT NULL DEFAULT 0",
+                "http_bytes": "INTEGER NOT NULL DEFAULT 0",
+                "http_failures": "INTEGER NOT NULL DEFAULT 0",
+                "http_rate_limit_wait_seconds": "REAL NOT NULL DEFAULT 0",
+                "http_elapsed_seconds": "REAL NOT NULL DEFAULT 0",
+                "budget_exceeded": "INTEGER NOT NULL DEFAULT 0",
+                "budget_reason": "TEXT",
+                "http_metrics_json": "TEXT",
+            }
+            for name, ddl in additions.items():
+                if name not in run_columns:
+                    self.db.execute(f"ALTER TABLE runs ADD COLUMN {name} {ddl}")
+            version = 3
+
         self.db.execute(
             "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
             (str(version),),
@@ -167,7 +191,14 @@ class ArtifactLedger:
         self.db.commit()
         return run_id
 
-    def finish_run(self, run_id: str, *, status: str, error: str | None = None) -> None:
+    def finish_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        error: str | None = None,
+        http_metrics: dict[str, Any] | None = None,
+    ) -> None:
         counts = self.db.execute(
             """
             SELECT COUNT(*) AS n, COALESCE(SUM(size_bytes),0) AS bytes
@@ -175,9 +206,14 @@ class ArtifactLedger:
             """,
             (run_id,),
         ).fetchone()
+        metrics = dict(http_metrics or {})
         self.db.execute(
             """
-            UPDATE runs SET status=?, finished_at=?, error=?, artifacts_observed=?, bytes_observed=?
+            UPDATE runs SET
+                status=?, finished_at=?, error=?, artifacts_observed=?, bytes_observed=?,
+                http_requests=?, http_attempts=?, http_retries=?, http_304=?, http_bytes=?,
+                http_failures=?, http_rate_limit_wait_seconds=?, http_elapsed_seconds=?,
+                budget_exceeded=?, budget_reason=?, http_metrics_json=?
             WHERE run_id=?
             """,
             (
@@ -186,6 +222,17 @@ class ArtifactLedger:
                 str(error)[-2000:] if error else None,
                 int(counts["n"] or 0),
                 int(counts["bytes"] or 0),
+                int(metrics.get("logical_requests") or 0),
+                int(metrics.get("network_attempts") or 0),
+                int(metrics.get("retries") or 0),
+                int(metrics.get("responses_304") or 0),
+                int(metrics.get("bytes_downloaded") or 0),
+                int(metrics.get("failures") or 0),
+                float(metrics.get("rate_limit_wait_seconds") or 0.0),
+                float(metrics.get("elapsed_seconds") or 0.0),
+                1 if metrics.get("budget_exceeded") else 0,
+                str(metrics.get("budget_reason") or "")[-2000:] or None,
+                json.dumps(metrics, ensure_ascii=False, sort_keys=True, default=str) if metrics else None,
                 run_id,
             ),
         )
