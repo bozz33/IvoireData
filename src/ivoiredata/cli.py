@@ -5,6 +5,7 @@ import json
 
 from .artifact_ledger import ArtifactLedger
 from .artifact_runtime import ingest_existing_upstreams
+from .data_gouv_audit import data_gouv_coverage_audit
 from .delivery import inventory, source_paths
 from .discoveries import data_gouv_discoveries
 from .engine import IvoireDataEngine
@@ -34,6 +35,10 @@ def parser():
     a.add_argument("--source-id", default=None)
     a.add_argument("--execute", action="store_true", help="actually re-sync affected public sources with force=true")
     a.add_argument("--max-sources", type=int, default=20, help="safety cap for --execute")
+
+    dg = sub.add_parser("data-gouv", help="Data.gouv CI physical acquisition and coverage controls")
+    dg_sub = dg.add_subparsers(dest="data_gouv_action", required=True)
+    dg_sub.add_parser("audit", help="compare live official Data Fair catalogue with physical Artifact Ledger state")
 
     s = sub.add_parser("discoveries"); s.add_argument("--limit", type=int, default=100, help="maximum unmapped Data.gouv discoveries to display")
     s = sub.add_parser("ci-gold"); s.add_argument("--write", action="store_true", help="write qualification artifacts under data_lake/reports/ci-gold")
@@ -215,8 +220,6 @@ def _artifacts_control(engine: IvoireDataEngine, args) -> int:
                     continue
                 result = engine.sync(sid, force=True)
                 results.append(result.__dict__)
-            # The sync wrapper has already recorded new upstream state; re-importing here
-            # also covers sources whose connector did not create any new run artifacts.
             ingest_existing_upstreams(engine, source_id)
             verification = ledger.verify(source_id=source_id)
             payload = {
@@ -258,6 +261,11 @@ def main(argv=None) -> int:
     if args.command == "quality-audit": print(json.dumps(engine.quality_audit(), ensure_ascii=False, indent=2)); return 0
     if args.command == "upstreams": print(json.dumps(engine.upstream_audit(args.source_id), ensure_ascii=False, indent=2, default=str)); return 0
     if args.command == "artifacts": return _artifacts_control(engine, args)
+    if args.command == "data-gouv":
+        if args.data_gouv_action == "audit":
+            print(json.dumps(data_gouv_coverage_audit(engine), ensure_ascii=False, indent=2, default=str))
+            return 0
+        raise SystemExit(f"unknown data-gouv action: {args.data_gouv_action}")
     if args.command == "discoveries": print(json.dumps(data_gouv_discoveries(engine, limit=args.limit), ensure_ascii=False, indent=2)); return 0
     if args.command == "ci-gold":
         payload = engine.write_ci_gold() if args.write else engine.ci_gold()
