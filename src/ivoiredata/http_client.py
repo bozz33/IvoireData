@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextvars
-import json
 import os
 import threading
 import time
@@ -95,16 +94,32 @@ def _mapping(value: Any) -> dict[str, Any]:
 def policy_from_options(options: Mapping[str, Any] | None = None) -> HttpPolicy:
     cfg = _mapping(_mapping(options).get("http_policy"))
     return HttpPolicy(
-        connect_timeout_seconds=float(cfg.get("connect_timeout_seconds", _env_float("IVOIREDATA_HTTP_CONNECT_TIMEOUT", 10.0))),
-        read_timeout_seconds=float(cfg.get("read_timeout_seconds", _env_float("IVOIREDATA_HTTP_READ_TIMEOUT", 180.0))),
+        connect_timeout_seconds=float(
+            cfg.get("connect_timeout_seconds", _env_float("IVOIREDATA_HTTP_CONNECT_TIMEOUT", 10.0))
+        ),
+        read_timeout_seconds=float(
+            cfg.get("read_timeout_seconds", _env_float("IVOIREDATA_HTTP_READ_TIMEOUT", 180.0))
+        ),
         retries=max(0, int(cfg.get("retries", _env_int("IVOIREDATA_HTTP_RETRIES", 4)))),
-        backoff_factor=max(0.0, float(cfg.get("backoff_factor", _env_float("IVOIREDATA_HTTP_BACKOFF_FACTOR", 0.5)))),
-        backoff_jitter=max(0.0, float(cfg.get("backoff_jitter", _env_float("IVOIREDATA_HTTP_BACKOFF_JITTER", 0.25)))),
-        backoff_max_seconds=max(0.0, float(cfg.get("backoff_max_seconds", _env_float("IVOIREDATA_HTTP_BACKOFF_MAX", 30.0)))),
-        retry_after_max_seconds=max(1, int(cfg.get("retry_after_max_seconds", _env_int("IVOIREDATA_HTTP_RETRY_AFTER_MAX", 300)))),
-        pool_connections=max(1, int(cfg.get("pool_connections", _env_int("IVOIREDATA_HTTP_POOL_CONNECTIONS", 16)))),
+        backoff_factor=max(
+            0.0, float(cfg.get("backoff_factor", _env_float("IVOIREDATA_HTTP_BACKOFF_FACTOR", 0.5)))
+        ),
+        backoff_jitter=max(
+            0.0, float(cfg.get("backoff_jitter", _env_float("IVOIREDATA_HTTP_BACKOFF_JITTER", 0.25)))
+        ),
+        backoff_max_seconds=max(
+            0.0, float(cfg.get("backoff_max_seconds", _env_float("IVOIREDATA_HTTP_BACKOFF_MAX", 30.0)))
+        ),
+        retry_after_max_seconds=max(
+            1, int(cfg.get("retry_after_max_seconds", _env_int("IVOIREDATA_HTTP_RETRY_AFTER_MAX", 300)))
+        ),
+        pool_connections=max(
+            1, int(cfg.get("pool_connections", _env_int("IVOIREDATA_HTTP_POOL_CONNECTIONS", 16)))
+        ),
         pool_maxsize=max(1, int(cfg.get("pool_maxsize", _env_int("IVOIREDATA_HTTP_POOL_MAXSIZE", 16)))),
-        min_interval_seconds=max(0.0, float(cfg.get("min_interval_seconds", _env_float("IVOIREDATA_HTTP_MIN_INTERVAL", 0.0)))),
+        min_interval_seconds=max(
+            0.0, float(cfg.get("min_interval_seconds", _env_float("IVOIREDATA_HTTP_MIN_INTERVAL", 0.0)))
+        ),
         retry_statuses=tuple(int(x) for x in cfg.get("retry_statuses", (429, 500, 502, 503, 504))),
     )
 
@@ -138,16 +153,13 @@ def _build_retry(policy: HttpPolicy) -> Retry:
         "backoff_jitter": policy.backoff_jitter,
         "retry_after_max": policy.retry_after_max_seconds,
     }
-    # IvoireData supports the urllib3 versions accepted by Requests. Older 1.26 builds
-    # do not expose backoff_jitter/retry_after_max, so degrade without losing retries.
-    for optional in (None, "retry_after_max", "backoff_jitter"):
+    # Requests may be paired with different urllib3 versions. Keep the strongest
+    # supported retry policy without making an optional Retry keyword a startup failure.
+    for optional in ("retry_after_max", "backoff_jitter"):
         try:
             return Retry(**kwargs)
         except TypeError:
-            if optional is None:
-                kwargs.pop("retry_after_max", None)
-            else:
-                kwargs.pop(optional, None)
+            kwargs.pop(optional, None)
     return Retry(**kwargs)
 
 
@@ -167,7 +179,7 @@ class HttpRunContext:
         *,
         source_id: str,
         run_id: str,
-        state_dir: Path,
+        state_dir: Path | None,
         user_agent: str,
         policy: HttpPolicy,
         budget: HttpBudget,
@@ -179,8 +191,12 @@ class HttpRunContext:
         self.budget = budget
         self.metrics = HttpMetrics()
         self.started_monotonic = time.monotonic()
-        self.checkpoint_path = Path(state_dir) / "http_runs" / f"{run_id}.json"
-        self._lock = threading.Lock()
+        self.checkpoint_path = (
+            Path(state_dir) / "http_runs" / f"{run_id}.json" if state_dir is not None else None
+        )
+        # _trip() may checkpoint while a budget counter is already protected, so this
+        # must be re-entrant rather than a plain Lock.
+        self._lock = threading.RLock()
         self._token = None
         self._bytes_since_checkpoint = 0
         self.checkpoint("RUNNING")
@@ -190,8 +206,11 @@ class HttpRunContext:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        self.metrics.elapsed_seconds = max(0.0, time.monotonic() - self.started_monotonic)
-        self.checkpoint("BUDGET_EXCEEDED" if self.metrics.budget_exceeded else ("ERROR" if exc else "FINISHED"))
+        with self._lock:
+            self.metrics.elapsed_seconds = self._elapsed()
+        self.checkpoint(
+            "BUDGET_EXCEEDED" if self.metrics.budget_exceeded else ("ERROR" if exc else "FINISHED")
+        )
         if self._token is not None:
             _CURRENT_HTTP_RUN.reset(self._token)
 
@@ -199,19 +218,21 @@ class HttpRunContext:
         return max(0.0, time.monotonic() - self.started_monotonic)
 
     def _trip(self, reason: str) -> None:
-        self.metrics.budget_exceeded = True
-        self.metrics.budget_reason = reason
-        self.metrics.elapsed_seconds = self._elapsed()
+        with self._lock:
+            self.metrics.budget_exceeded = True
+            self.metrics.budget_reason = reason
+            self.metrics.elapsed_seconds = self._elapsed()
         self.checkpoint("BUDGET_EXCEEDED")
         raise HttpBudgetExceeded(reason)
 
     def check_time(self) -> None:
-        if self.budget.max_seconds is not None and self._elapsed() > self.budget.max_seconds:
-            self._trip(f"HTTP time budget exceeded: {self._elapsed():.3f}s > {self.budget.max_seconds:.3f}s")
+        elapsed = self._elapsed()
+        if self.budget.max_seconds is not None and elapsed > self.budget.max_seconds:
+            self._trip(f"HTTP time budget exceeded: {elapsed:.3f}s > {self.budget.max_seconds:.3f}s")
 
     def before_request(self, url: str) -> None:
+        self.check_time()
         with self._lock:
-            self.check_time()
             next_count = self.metrics.logical_requests + 1
             if self.budget.max_requests is not None and next_count > self.budget.max_requests:
                 self._trip(f"HTTP request budget exceeded: {next_count} > {self.budget.max_requests}")
@@ -226,8 +247,8 @@ class HttpRunContext:
         self.check_time()
 
     def after_response(self, response: requests.Response) -> None:
-        retries_history = tuple(getattr(getattr(response, "raw", None), "retries", None).history or ()) if getattr(getattr(response, "raw", None), "retries", None) is not None else ()
-        retry_count = len(retries_history)
+        retries_obj = getattr(getattr(response, "raw", None), "retries", None)
+        retry_count = len(tuple(getattr(retries_obj, "history", ()) or ()))
         status = int(response.status_code)
         with self._lock:
             self.metrics.network_attempts += 1 + retry_count
@@ -236,12 +257,18 @@ class HttpRunContext:
             self.metrics.status_counts[key] = self.metrics.status_counts.get(key, 0) + 1
             if status == 304:
                 self.metrics.responses_304 += 1
+            # 404 is deliberately not a run-budget failure: connectors such as Data.gouv
+            # use authoritative 404s to classify upstream tombstones/ghost catalogue rows.
             if status == 429 or status >= 500:
                 self.metrics.failures += 1
-                if self.budget.max_failures is not None and self.metrics.failures > self.budget.max_failures:
-                    self._trip(f"HTTP failure budget exceeded: {self.metrics.failures} > {self.budget.max_failures}")
+                failures = self.metrics.failures
+            else:
+                failures = self.metrics.failures
             self.metrics.elapsed_seconds = self._elapsed()
         self.checkpoint("RUNNING")
+        if self.budget.max_failures is not None and failures > self.budget.max_failures:
+            self._trip(f"HTTP failure budget exceeded: {failures} > {self.budget.max_failures}")
+        self.check_time()
 
     def after_exception(self, exc: BaseException) -> None:
         with self._lock:
@@ -251,7 +278,11 @@ class HttpRunContext:
             failures = self.metrics.failures
         self.checkpoint("RUNNING")
         if self.budget.max_failures is not None and failures > self.budget.max_failures:
-            self._trip(f"HTTP failure budget exceeded after {type(exc).__name__}: {failures} > {self.budget.max_failures}")
+            self._trip(
+                f"HTTP failure budget exceeded after {type(exc).__name__}: "
+                f"{failures} > {self.budget.max_failures}"
+            )
+        self.check_time()
 
     def consume_bytes(self, amount: int) -> None:
         if amount <= 0:
@@ -281,19 +312,9 @@ class HttpRunContext:
             }
 
     def checkpoint(self, status: str) -> None:
-        payload = self.snapshot() if self._lock.acquire(blocking=False) else None
-        if payload is not None:
-            self._lock.release()
-        else:
-            # Caller already owns the metrics lock. Avoid deadlock and write a minimal
-            # checkpoint; the next normal checkpoint will contain full counters.
-            payload = {
-                "source_id": self.source_id,
-                "run_id": self.run_id,
-                "policy": asdict(self.policy),
-                "budget": asdict(self.budget),
-                **asdict(self.metrics),
-            }
+        if self.checkpoint_path is None:
+            return
+        payload = self.snapshot()
         payload["status"] = status
         payload["checkpointed_at_epoch"] = time.time()
         atomic_write_json(self.checkpoint_path, payload)
@@ -304,7 +325,10 @@ class BudgetedSession(requests.Session):
         super().__init__()
         self.context = context
         self.verify = verify_ssl
-        self.headers.update({"User-Agent": context.user_agent, "Accept-Encoding": "gzip, deflate"})
+        self.headers.update({
+            "User-Agent": context.user_agent,
+            "Accept-Encoding": "gzip, deflate",
+        })
         adapter = HTTPAdapter(
             max_retries=_build_retry(context.policy),
             pool_connections=context.policy.pool_connections,
@@ -334,9 +358,15 @@ class BudgetedSession(requests.Session):
 
             def iter_content(chunk_size=1, decode_unicode=False) -> Iterator[Any]:
                 try:
-                    for chunk in original_iter_content(chunk_size=chunk_size, decode_unicode=decode_unicode):
+                    for chunk in original_iter_content(
+                        chunk_size=chunk_size, decode_unicode=decode_unicode
+                    ):
                         if chunk:
-                            size = len(chunk.encode(response.encoding or "utf-8", "replace")) if isinstance(chunk, str) else len(chunk)
+                            size = (
+                                len(chunk.encode(response.encoding or "utf-8", "replace"))
+                                if isinstance(chunk, str)
+                                else len(chunk)
+                            )
                             context.consume_bytes(size)
                         yield chunk
                 finally:
@@ -351,17 +381,21 @@ class BudgetedSession(requests.Session):
 def new_session(user_agent: str, *, verify_ssl: bool = True) -> BudgetedSession:
     context = _CURRENT_HTTP_RUN.get()
     if context is None:
-        # Audits and standalone helpers may run outside Engine.sync. They still receive
-        # pooling/retry/timeouts, but no operational budget/checkpoint is imposed.
+        # Audits/helpers outside Engine.sync still receive pooling, retries and timeouts,
+        # but intentionally do not consume a source budget or create checkpoint files.
         context = HttpRunContext(
             source_id="standalone",
             run_id=f"standalone-{os.getpid()}-{time.time_ns()}",
-            state_dir=Path(os.getenv("IVOIREDATA_STATE_DIR") or ".ivoiredata/state"),
+            state_dir=None,
             user_agent=user_agent,
             policy=policy_from_options({}),
             budget=HttpBudget(max_requests=None, max_bytes=None, max_seconds=None, max_failures=None),
         )
     return BudgetedSession(context, verify_ssl=verify_ssl)
+
+
+def current_http_run() -> HttpRunContext | None:
+    return _CURRENT_HTTP_RUN.get()
 
 
 def http_run_context(
