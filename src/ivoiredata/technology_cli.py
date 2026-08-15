@@ -6,6 +6,7 @@ import json
 from .settings import Settings
 from .technology_catalog import GlobalTechnologyCatalogEngine
 from .technology_harvester import RegistryHarvester, TechnologyHarvestQueue, qualify_pending
+from .technology_wikidata import discover_wikidata_resilient
 
 
 def parser() -> argparse.ArgumentParser:
@@ -22,7 +23,7 @@ def parser() -> argparse.ArgumentParser:
     languages = sub.add_parser("languages", help="discover programming languages from GitHub Linguist")
     languages.add_argument("--limit", type=int, default=0, help="0 means all programming languages")
 
-    wikidata = sub.add_parser("wikidata", help="discover programming languages/frameworks from Wikidata")
+    wikidata = sub.add_parser("wikidata", help="discover a bounded language/framework seed from Wikidata using resilient split queries")
     wikidata.add_argument("--limit", type=int, default=500)
 
     catalog = sub.add_parser("catalog", help="show the local dynamic technology catalog")
@@ -35,8 +36,9 @@ def parser() -> argparse.ArgumentParser:
 
     harvest = sub.add_parser("harvest", help="discover package names from official bulk/change feeds into the SQLite queue")
     harvest.add_argument("registry", help="packagist, packagist-changes, pypi, rubygems, pub")
-    harvest.add_argument("--limit", type=int, default=500)
-    harvest.add_argument("--full", action="store_true", help="explicitly allow a full bulk index where supported")
+    harvest.add_argument("--limit", type=int, default=500, help="bounded candidate target for ranked feeds; full feeds may process an entire server page")
+    harvest.add_argument("--full", action="store_true", help="use the complete bulk source where supported instead of the bounded/ranked source")
+    harvest.add_argument("--reset", action="store_true", help="clear the source cursor/completion state before harvesting")
 
     qualify = sub.add_parser("qualify", help="resolve pending harvested candidates through native registries + cross-checks")
     qualify.add_argument("--limit", type=int, default=50)
@@ -79,7 +81,7 @@ def main(argv=None) -> int:
         elif args.command == "languages":
             payload = engine.discover_languages(limit=args.limit)
         elif args.command == "wikidata":
-            payload = engine.discover_wikidata(limit=args.limit)
+            payload = discover_wikidata_resilient(engine, limit=args.limit)
         elif args.command == "catalog":
             payload = engine.catalog(limit=args.limit, verified_only=args.verified_only, min_importance=args.min_importance)
         elif args.command == "refresh":
@@ -87,7 +89,7 @@ def main(argv=None) -> int:
         elif args.command == "harvest":
             queue = _queue(settings)
             payload = RegistryHarvester(queue=queue, user_agent=settings.user_agent).harvest(
-                args.registry, limit=args.limit, full=args.full
+                args.registry, limit=args.limit, full=args.full, reset=args.reset
             )
         elif args.command == "qualify":
             queue = _queue(settings)
@@ -97,7 +99,7 @@ def main(argv=None) -> int:
             harvester = RegistryHarvester(queue=queue, user_agent=settings.user_agent)
             payload = {
                 "languages": len(engine.discover_languages(limit=args.language_limit)),
-                "wikidata": len(engine.discover_wikidata(limit=args.wikidata_limit)),
+                "wikidata": len(discover_wikidata_resilient(engine, limit=args.wikidata_limit)),
                 "harvest": {
                     "packagist": harvester.harvest("packagist", limit=args.package_limit),
                     "rubygems": harvester.harvest("rubygems", limit=args.package_limit),
