@@ -3,9 +3,11 @@ from __future__ import annotations
 from .artifact_ledger import ArtifactLedger
 from .engine import IvoireDataEngine
 from .http_client import http_run_context
+from .http_requests_runtime import install_requests_runtime
 
 
 _ORIGINAL_SYNC = IvoireDataEngine.sync
+install_requests_runtime()
 
 
 def ingest_existing_upstreams(engine: IvoireDataEngine, source_id: str | None = None) -> int:
