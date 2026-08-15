@@ -102,11 +102,15 @@ def test_legacy_requests_session_is_instrumented_inside_run(tmp_path, monkeypatc
     assert metrics["network_attempts"] == 1
     assert metrics["bytes_downloaded"] == 5
     assert metrics["host_requests"] == {"example.test": 1}
+    checkpoint = json.loads(ctx.checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["logical_requests"] == 1
+    assert checkpoint["status"] == "FINISHED"
 
 
 def test_checkpoint_is_crash_readable_and_standalone_session_is_quiet(tmp_path):
     ctx = _context(tmp_path)
     ctx.before_request("https://example.test/one")
+    ctx.checkpoint("RUNNING")
     payload = json.loads(ctx.checkpoint_path.read_text(encoding="utf-8"))
     assert payload["run_id"] == "run-test"
     assert payload["logical_requests"] == 1
