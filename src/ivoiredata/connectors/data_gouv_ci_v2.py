@@ -213,6 +213,37 @@ def _discover_official(session, page_size: int = 1000) -> list[dict[str, Any]]:
     return collected
 
 
+def _confirm_catalog_ghost(
+    session,
+    dsid: str,
+    *,
+    full_status: int | None,
+    lines_status: int | None,
+) -> dict[str, Any] | None:
+    """Confirm a stale Data Fair search-index entry without masking transient failures."""
+    if full_status != 404 or lines_status != 404:
+        return None
+    detail_url = f"{API}/datasets/{quote(dsid, safe='')}"
+    try:
+        response = session.get(
+            detail_url,
+            timeout=60,
+            headers={"Accept": "application/json"},
+        )
+    except Exception:
+        return None
+    if int(getattr(response, "status_code", 0) or 0) != 404:
+        return None
+    return {
+        "catalog_visible": True,
+        "full_status": 404,
+        "lines_status": 404,
+        "detail_status": 404,
+        "detail_url": detail_url,
+        "classification": "CATALOG_VISIBLE_BUT_AUTHORITY_DATASET_MISSING",
+    }
+
+
 @dataclass
 class _MaterializedRows:
     path: Path
@@ -493,6 +524,10 @@ def data_gouv_ci_resource_v2(
             "via_lines_stream": 0,
             "empty": 0,
             "failed": 0,
+            "upstream_ghost": 0,
+            "ghost_unchanged": 0,
+            "ghost_rechecked": 0,
+            "upstream_ghost_ids": [],
             "removed_upstream": 0,
             "removed_upstream_ids": [],
             "archived_removed_tables": [],
@@ -500,8 +535,9 @@ def data_gouv_ci_resource_v2(
             "failures": [],
             "pagination": "Data Fair page>=1 until advertised count is reached; /lines follows next cursor until absent",
             "streaming": True,
-            "force_semantics": "force checks now; unchanged versions with verified local snapshots are not downloaded again",
+            "force_semantics": "force checks current catalogue signatures; unchanged physical datasets and unchanged confirmed ghosts do not redownload/reprobe bodies",
             "physical_truth": "DLT signature alone never proves a fetched artifact; missing raw snapshots are backfilled",
+            "ghost_semantics": "catalogue-visible entry is UPSTREAM_GHOST only after /full=404, /lines=404 and Data Fair detail=404",
         }
 
         if upstream:
@@ -509,7 +545,7 @@ def data_gouv_ci_resource_v2(
             previous = {
                 str(row.get("artifact_id", ""))[8:]
                 for row in previous_rows
-                if str(row.get("artifact_id", "")).startswith("dataset:") and row.get("downloaded")
+                if str(row.get("artifact_id", "")).startswith("dataset:") and not row.get("removed")
             }
             removed_ids = sorted(previous - catalog_ids)
             for removed in removed_ids:
@@ -525,9 +561,17 @@ def data_gouv_ci_resource_v2(
             legacy_signature = _legacy_signature(meta)
             artifact = f"dataset:{dsid}"
             cached_state = upstream.get(source_id, artifact) if upstream else {}
+            cached_result = str(cached_state.get("last_result") or "").upper()
             if cached_state.get("removed"):
                 loaded_signatures.pop(dsid, None)
                 stats["reappeared"] += 1
+            if cached_result == "UPSTREAM_GHOST" and cached_state.get("signature") == signature:
+                stats["upstream_ghost"] += 1
+                stats["ghost_unchanged"] += 1
+                stats["upstream_ghost_ids"].append(dsid)
+                continue
+            if cached_result == "UPSTREAM_GHOST":
+                stats["ghost_rechecked"] += 1
             loaded = loaded_signatures.get(dsid)
 
             physical_current = _has_physical_cache(upstream, source_id, artifact, signature)
@@ -578,6 +622,25 @@ def data_gouv_ci_resource_v2(
                         stats["via_lines_stream"] += 1
                     except Exception as lines_exc:
                         lines_status = getattr(getattr(lines_exc, "response", None), "status_code", None)
+                        ghost_evidence = _confirm_catalog_ghost(
+                            session,
+                            dsid,
+                            full_status=full_status,
+                            lines_status=lines_status,
+                        )
+                        if ghost_evidence is not None:
+                            stats["upstream_ghost"] += 1
+                            stats["upstream_ghost_ids"].append(dsid)
+                            if upstream:
+                                upstream.mark_ghost(
+                                    source_id,
+                                    artifact,
+                                    url=str(ghost_evidence["detail_url"]),
+                                    signature=signature,
+                                    evidence=ghost_evidence,
+                                )
+                            continue
+
                         error = f"/full: {full_error}; /lines: {lines_exc}"
                         stats["failed"] += 1
                         stats["failures"].append({

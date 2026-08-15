@@ -35,37 +35,70 @@ def data_gouv_coverage_from_catalog(engine: Any, catalog: list[dict[str, Any]]) 
             by_id[artifact_id[8:]] = row
 
     status_counts = Counter(str(row.get("status") or "DISCOVERED") for row in by_id.values())
+    verification_counts = Counter(
+        str(row.get("verification_status") or "UNVERIFIED") for row in by_id.values()
+    )
     not_tracked = [dsid for dsid in official_ids if dsid not in by_id]
     local_missing = [dsid for dsid in official_ids if str(by_id.get(dsid, {}).get("status")) == "LOCAL_MISSING"]
     corrupted = [dsid for dsid in official_ids if str(by_id.get(dsid, {}).get("status")) == "CORRUPTED"]
     failed = [dsid for dsid in official_ids if str(by_id.get(dsid, {}).get("status")) == "FAILED"]
-    verified = [dsid for dsid in official_ids if str(by_id.get(dsid, {}).get("status")) == "VERIFIED"]
-    physical = [dsid for dsid in official_ids if str(by_id.get(dsid, {}).get("status")) in _PHYSICAL]
-    unverified_physical = [
-        dsid for dsid in physical if str(by_id.get(dsid, {}).get("status")) != "VERIFIED"
+    ghosts = [dsid for dsid in official_ids if str(by_id.get(dsid, {}).get("status")) == "UPSTREAM_GHOST"]
+    ghost_set = set(ghosts)
+    retrievable_ids = [dsid for dsid in official_ids if dsid not in ghost_set]
+    physical = [
+        dsid for dsid in retrievable_ids
+        if str(by_id.get(dsid, {}).get("status")) in _PHYSICAL
     ]
+    verified = [
+        dsid for dsid in physical
+        if str(by_id.get(dsid, {}).get("verification_status") or "UNVERIFIED") == "VERIFIED"
+    ]
+    unverified_physical = [dsid for dsid in physical if dsid not in set(verified)]
     unexpected = sorted(set(by_id) - official_set)
     bad_ids = sorted(set(local_missing + corrupted + failed))
+    not_tracked_retrievable = [dsid for dsid in retrievable_ids if dsid not in by_id]
 
+    retrievable_count = len(retrievable_ids)
     return {
         "source_id": _SOURCE_ID,
         "official_visible": len(official_ids),
+        "official_retrievable": retrievable_count,
+        "upstream_ghost": len(ghosts),
         "ledger_tracked": sum(1 for dsid in official_ids if dsid in by_id),
         "physical": len(physical),
         "verified": len(verified),
         "unverified_physical": len(unverified_physical),
         "not_tracked": len(not_tracked),
+        "not_tracked_retrievable": len(not_tracked_retrievable),
         "bad": len(bad_ids),
         "by_status": dict(sorted(status_counts.items())),
-        "complete_physical": len(not_tracked) == 0 and len(bad_ids) == 0 and len(physical) == len(official_ids),
-        "complete_verified": len(verified) == len(official_ids) and len(official_ids) > 0,
+        "verification_by_status": dict(sorted(verification_counts.items())),
+        "physical_coverage_retrievable": (
+            len(physical) / retrievable_count if retrievable_count else 1.0
+        ),
+        "verified_coverage_retrievable": (
+            len(verified) / retrievable_count if retrievable_count else 1.0
+        ),
+        "complete_physical": (
+            len(not_tracked_retrievable) == 0
+            and len(bad_ids) == 0
+            and len(physical) == retrievable_count
+        ),
+        "complete_verified": (
+            len(not_tracked_retrievable) == 0
+            and len(bad_ids) == 0
+            and len(verified) == retrievable_count
+        ),
         "missing_ids": not_tracked,
+        "missing_retrievable_ids": not_tracked_retrievable,
+        "upstream_ghost_ids": ghosts,
         "local_missing_ids": local_missing,
         "corrupted_ids": corrupted,
         "failed_ids": failed,
         "unverified_physical_ids": unverified_physical,
         "unexpected_tracked_ids": unexpected,
         "official_ids": official_ids,
+        "retrievable_ids": retrievable_ids,
     }
 
 

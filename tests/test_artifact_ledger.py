@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 
 from ivoiredata.artifact_ledger import ArtifactLedger
 
@@ -14,30 +15,44 @@ def test_artifact_ledger_detects_verified_corrupted_and_missing(tmp_path):
 
     ledger = ArtifactLedger(database)
     try:
-        row = ledger.ingest_upstream_row(
-            {
-                "source_id": "civ_test",
-                "artifact_id": "dataset:one",
-                "url": "https://example.test/one.csv",
-                "signature": "v1",
-                "sha256": digest,
-                "size_bytes": raw.stat().st_size,
-                "local_path": str(raw),
-                "downloaded": True,
-                "last_result": "DOWNLOADED",
-                "last_downloaded": "2026-08-15T00:00:00Z",
-            }
-        )
+        upstream_row = {
+            "source_id": "civ_test",
+            "artifact_id": "dataset:one",
+            "url": "https://example.test/one.csv",
+            "signature": "v1",
+            "sha256": digest,
+            "size_bytes": raw.stat().st_size,
+            "local_path": str(raw),
+            "downloaded": True,
+            "last_result": "DOWNLOADED",
+            "last_downloaded": "2026-08-15T00:00:00Z",
+        }
+        row = ledger.ingest_upstream_row(upstream_row)
         assert row["status"] == "FETCHED"
+        assert row["verification_status"] == "UNVERIFIED"
 
         verified = ledger.verify(source_id="civ_test")
         assert verified["verified"] == 1
-        assert ledger.get("civ_test", "dataset:one")["status"] == "VERIFIED"
+        verified_row = ledger.get("civ_test", "dataset:one")
+        assert verified_row["status"] == "FETCHED"
+        assert verified_row["verification_status"] == "VERIFIED"
+        assert verified_row["verified_sha256"] == digest
+        verified_at = verified_row["verified_at"]
+
+        # A later unchanged sync must not erase cryptographic proof for the same bytes.
+        ledger.ingest_upstream_row({**upstream_row, "last_result": "UNCHANGED"})
+        unchanged = ledger.get("civ_test", "dataset:one")
+        assert unchanged["status"] == "UNCHANGED"
+        assert unchanged["verification_status"] == "VERIFIED"
+        assert unchanged["verified_at"] == verified_at
+        assert ledger.audit(source_id="civ_test")["verified_artifacts"] == 1
 
         raw.write_bytes(b"tampered")
         corrupted = ledger.verify(source_id="civ_test")
         assert corrupted["corrupted"] == 1
-        assert ledger.get("civ_test", "dataset:one")["status"] == "CORRUPTED"
+        corrupted_row = ledger.get("civ_test", "dataset:one")
+        assert corrupted_row["status"] == "CORRUPTED"
+        assert corrupted_row["verification_status"] == "FAILED"
         assert ledger.repair_plan(source_id="civ_test")["repairable_artifacts"] == 1
 
         raw.unlink()
@@ -90,10 +105,69 @@ def test_artifact_run_ledger_records_observed_artifacts(tmp_path):
         )
         ledger.finish_run(run_id, status="SUCCESS")
         audit = ledger.audit(source_id="civ_test")
-        assert audit["schema_version"] == 1
+        assert audit["schema_version"] == 2
         assert audit["recent_runs"][0]["run_id"] == run_id
         assert audit["recent_runs"][0]["status"] == "SUCCESS"
         assert audit["recent_runs"][0]["artifacts_observed"] == 1
         assert audit["recent_runs"][0]["bytes_observed"] == raw.stat().st_size
+    finally:
+        ledger.close()
+
+
+def test_v1_migration_recovers_verified_at_after_status_was_overwritten(tmp_path):
+    database = tmp_path / "legacy.sqlite3"
+    raw = tmp_path / "legacy.csv"
+    raw.write_bytes(b"x\n1\n")
+    digest = hashlib.sha256(raw.read_bytes()).hexdigest()
+    db = sqlite3.connect(database)
+    try:
+        db.execute("CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        db.execute("INSERT INTO schema_meta(key,value) VALUES('schema_version','1')")
+        db.executescript(
+            """
+            CREATE TABLE artifacts (
+                source_id TEXT NOT NULL, artifact_id TEXT NOT NULL, upstream_id TEXT,
+                upstream_url TEXT, artifact_type TEXT, status TEXT NOT NULL DEFAULT 'DISCOVERED',
+                upstream_signature TEXT, etag TEXT, last_modified TEXT, sha256 TEXT,
+                size_bytes INTEGER, local_path TEXT, first_seen_at TEXT NOT NULL,
+                last_checked_at TEXT, downloaded_at TEXT, verified_at TEXT,
+                http_status INTEGER, fetch_method TEXT, error TEXT, last_run_id TEXT,
+                PRIMARY KEY (source_id, artifact_id)
+            );
+            CREATE TABLE runs (
+                run_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, connector TEXT, force INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'RUNNING', started_at TEXT NOT NULL, finished_at TEXT,
+                error TEXT, artifacts_observed INTEGER NOT NULL DEFAULT 0, bytes_observed INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE run_artifacts (
+                run_id TEXT NOT NULL, source_id TEXT NOT NULL, artifact_id TEXT NOT NULL,
+                status TEXT NOT NULL, size_bytes INTEGER, local_path TEXT, observed_at TEXT NOT NULL,
+                PRIMARY KEY (run_id, source_id, artifact_id)
+            );
+            """
+        )
+        db.execute(
+            """
+            INSERT INTO artifacts(
+                source_id,artifact_id,status,sha256,size_bytes,local_path,first_seen_at,verified_at
+            ) VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (
+                "civ_datagouv_catalog", "dataset:legacy", "UNCHANGED", digest,
+                raw.stat().st_size, str(raw), "2026-08-15T00:00:00Z", "2026-08-15T01:00:00Z",
+            ),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    ledger = ArtifactLedger(database)
+    try:
+        row = ledger.get("civ_datagouv_catalog", "dataset:legacy")
+        assert ledger.schema_version == 2
+        assert row["status"] == "UNCHANGED"
+        assert row["verification_status"] == "VERIFIED"
+        assert row["verified_sha256"] == digest
+        assert ledger.audit(source_id="civ_datagouv_catalog")["verified_artifacts"] == 1
     finally:
         ledger.close()
