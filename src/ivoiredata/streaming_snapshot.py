@@ -13,16 +13,26 @@ from urllib.parse import urlparse
 from .state_io import atomic_write_json
 
 _SAFE = re.compile(r"[^a-zA-Z0-9_.-]+")
+_SAFE_COMPONENT_MAX = 120
 
 
-def _safe_filename(value: str) -> str:
+def _safe_filename(value: str, *, max_length: int = _SAFE_COMPONENT_MAX) -> str:
+    """Return an ASCII-safe path component with a bounded byte length.
+
+    Linux filesystems commonly cap a single filename at 255 bytes. Snapshot names also
+    append ``--<sha256>`` and an extension, so allowing a 180-byte stem could exceed
+    NAME_MAX for long Data Fair dataset identifiers. Keep the human-readable prefix
+    bounded and let the digest provide collision resistance.
+    """
     value = _SAFE.sub("_", value).strip("._")
-    return value[:180] or "payload"
+    limit = max(16, int(max_length))
+    return value[:limit] or "payload"
 
 
 def _extension(url: str, content_type: str | None, name: str | None = None) -> str:
     if name and Path(name).suffix:
-        return Path(name).suffix
+        suffix = Path(name).suffix
+        return suffix[:16] if len(suffix) > 16 else suffix
     suffix = Path(urlparse(url).path).suffix
     if suffix and len(suffix) <= 12:
         return suffix
@@ -74,7 +84,14 @@ def finalize_temp_snapshot(
     ext = _extension(url, content_type, name)
     if not Path(base).suffix:
         base += ext
-    filename = f"{_safe_filename(Path(base).stem)}--{actual_sha}{Path(base).suffix or ext}"
+    suffix = Path(base).suffix or ext
+    stem = _safe_filename(Path(base).stem)
+    filename = f"{stem}--{actual_sha}{suffix}"
+    # Defensive guard independent from filesystem NAME_MAX. The normal bound above is
+    # already well below 255 bytes, but preserve the digest even with exotic suffixes.
+    if len(filename.encode("utf-8")) > 240:
+        stem = _safe_filename(stem, max_length=80)
+        filename = f"{stem}--{actual_sha}{suffix[:16]}"
     final_path = directory / filename
     if final_path.exists():
         temp_path.unlink(missing_ok=True)
