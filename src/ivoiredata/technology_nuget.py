@@ -193,13 +193,6 @@ class NuGetCatalogHarvester:
         items.sort(key=_item_key)
         return items
 
-    def _candidate_status(self, package_norm: str) -> str | None:
-        row = self.queue.db.execute(
-            "SELECT status FROM candidates WHERE registry=? AND name=? COLLATE NOCASE LIMIT 1",
-            (NUGET_REGISTRY, package_norm),
-        ).fetchone()
-        return str(row["status"]) if row else None
-
     def _apply_items_with_cursor(
         self,
         *,
@@ -208,7 +201,7 @@ class NuGetCatalogHarvester:
         cursor_payload: dict[str, Any],
         requeue_changed: bool,
     ) -> NuGetCatalogStats:
-        from .technology_harvester import HarvestCandidate
+        from .technology_harvester import HarvestCandidate, _now
 
         stats = NuGetCatalogStats()
         affected: dict[str, str] = {}
@@ -259,34 +252,37 @@ class NuGetCatalogHarvester:
                     stats.package_details += 1
                 affected[package_norm] = package_id
 
-            now = __import__("ivoiredata.technology_harvester", fromlist=["_now"])._now()
-            for package_norm, package_id in affected.items():
+            now = _now()
+            inflight = cursor_payload.get("inflight") if isinstance(cursor_payload.get("inflight"), dict) else {}
+            seen_token = str(cursor_payload.get("snapshot_timestamp") or inflight.get("target_timestamp") or "") or None
+            for package_norm, _canonical_package_id in affected.items():
                 active = self.queue.db.execute(
                     "SELECT COUNT(*) AS n FROM nuget_version_state WHERE package_id_norm=? AND deleted=0",
                     (package_norm,),
                 ).fetchone()
                 active_count = int(active["n"] or 0)
                 previous = self.queue.db.execute(
-                    "SELECT status FROM candidates WHERE registry=? AND lower(name)=? LIMIT 1",
+                    "SELECT status FROM candidates WHERE registry=? AND name=? LIMIT 1",
                     (NUGET_REGISTRY, package_norm),
                 ).fetchone()
                 previous_status = str(previous["status"]) if previous else None
                 if active_count <= 0:
                     self.queue._mark_deleted_no_commit(
                         NUGET_REGISTRY,
-                        package_id,
+                        package_norm,
                         source=source,
                         now=now,
                     )
-                    stats.deleted_packages += 1
+                    if previous_status != "DELETED":
+                        stats.deleted_packages += 1
                     continue
                 candidate = HarvestCandidate(
                     NUGET_REGISTRY,
-                    package_id,
+                    package_norm,
                     source,
                     65 if requeue_changed else 25,
                     requeue=bool(requeue_changed or previous_status == "DELETED"),
-                    seen_token=str(cursor_payload.get("snapshot_timestamp") or "") or None,
+                    seen_token=seen_token,
                 )
                 if self.queue._upsert_one(candidate, now=now):
                     stats.inserted_packages += 1
@@ -464,9 +460,7 @@ class NuGetCatalogHarvester:
             "snapshot_page_count": snapshot_page_count,
             "page_index": state.get("page_index"),
             "after_item_key": state.get("after_item_key"),
-            "changes_cursor": (
-                _cursor_json(self.queue.cursor(NUGET_CHANGES_SOURCE).get("cursor")).get("cursor_timestamp")
-            ),
+            "changes_cursor": _cursor_json(self.queue.cursor(NUGET_CHANGES_SOURCE).get("cursor")).get("cursor_timestamp"),
             **aggregate.as_dict(),
             **self._registry_stats(),
         }
