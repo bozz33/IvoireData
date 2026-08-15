@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import urljoin
 
 import requests
 
@@ -24,6 +22,7 @@ class HarvestCandidate:
     repository_hint: str | None = None
     type_hint: str | None = None
     abandoned: str | None = None
+    requeue: bool = False
 
 
 class TechnologyHarvestQueue:
@@ -91,8 +90,8 @@ class TechnologyHarvestQueue:
         updated = 0
         now = _now()
         for candidate in candidates:
-            exists = self.db.execute(
-                "SELECT 1 FROM candidates WHERE registry=? AND name=?",
+            previous = self.db.execute(
+                "SELECT status FROM candidates WHERE registry=? AND name=?",
                 (candidate.registry, candidate.name),
             ).fetchone()
             self.db.execute(
@@ -107,6 +106,8 @@ class TechnologyHarvestQueue:
                     repository_hint=COALESCE(excluded.repository_hint,candidates.repository_hint),
                     type_hint=COALESCE(excluded.type_hint,candidates.type_hint),
                     abandoned=COALESCE(excluded.abandoned,candidates.abandoned),
+                    status=CASE WHEN ? THEN 'PENDING' ELSE candidates.status END,
+                    last_error=CASE WHEN ? THEN NULL ELSE candidates.last_error END,
                     last_seen_at=excluded.last_seen_at
                 """,
                 (
@@ -119,9 +120,11 @@ class TechnologyHarvestQueue:
                     candidate.abandoned,
                     now,
                     now,
+                    bool(candidate.requeue),
+                    bool(candidate.requeue),
                 ),
             )
-            if exists:
+            if previous:
                 updated += 1
             else:
                 inserted += 1
@@ -173,6 +176,10 @@ class TechnologyHarvestQueue:
         )
         self.db.commit()
 
+    def reset_cursor(self, source: str) -> None:
+        self.db.execute("DELETE FROM cursors WHERE source=?", (source,))
+        self.db.commit()
+
     def audit(self) -> dict[str, Any]:
         status_rows = self.db.execute("SELECT status, COUNT(*) AS n FROM candidates GROUP BY status").fetchall()
         registry_rows = self.db.execute("SELECT registry, COUNT(*) AS n FROM candidates GROUP BY registry ORDER BY n DESC").fetchall()
@@ -191,7 +198,7 @@ class RegistryHarvester:
         self.user_agent = user_agent
         self.session = session or requests.Session()
 
-    def _get(self, url: str, *, headers: dict[str, str] | None = None, params: dict[str, Any] | None = None) -> requests.Response:
+    def _get(self, url: str, *, headers: dict[str, str] | None = None, params: Any = None) -> requests.Response:
         merged = {"User-Agent": self.user_agent, "Accept": "application/json"}
         if headers:
             merged.update(headers)
@@ -209,7 +216,7 @@ class RegistryHarvester:
             rows = payload.get("packages") or []
             if not rows:
                 break
-            for idx, row in enumerate(rows):
+            for row in rows:
                 if not isinstance(row, dict) or not row.get("name"):
                     continue
                 downloads = int(row.get("downloads") or 0)
@@ -265,9 +272,11 @@ class RegistryHarvester:
             if action.get("type") == "resync":
                 resync = True
                 continue
+            if action.get("type") == "delete":
+                continue
             name = str(action.get("package") or "").replace("~dev", "")
             if name:
-                candidates.append(HarvestCandidate("packagist.org", name, source, 60))
+                candidates.append(HarvestCandidate("packagist.org", name, source, 60, requeue=True))
         inserted, updated = self.queue.upsert_many(candidates)
         if timestamp is not None:
             self.queue.set_cursor(source, cursor=str(timestamp))
@@ -281,13 +290,22 @@ class RegistryHarvester:
             for row in rows if isinstance(rows, list) else []:
                 name = str((row or {}).get("name") or "").strip()
                 if name:
-                    candidates[name] = HarvestCandidate("rubygems.org", name, f"rubygems-{endpoint}", priority)
+                    candidates[name] = HarvestCandidate(
+                        "rubygems.org", name, f"rubygems-{endpoint}", priority,
+                        requeue=endpoint == "just_updated",
+                    )
         inserted, updated = self.queue.upsert_many(candidates.values())
         return {"source": "rubygems-activity", "discovered": len(candidates), "inserted": inserted, "updated": updated}
 
-    def harvest_pubdev(self, *, limit: int = 500) -> dict[str, Any]:
+    def harvest_pubdev(self, *, limit: int = 500, full: bool = False) -> dict[str, Any]:
         source = "pubdev-package-names"
-        next_url = self.queue.cursor(source).get("cursor") or "https://pub.dev/api/package-names"
+        state = self.queue.cursor(source)
+        if full:
+            self.queue.reset_cursor(source)
+            state = {}
+        if state.get("cursor") == "__COMPLETE__":
+            return {"source": source, "complete": True, "discovered": 0, "inserted": 0, "updated": 0}
+        next_url = state.get("cursor") or "https://pub.dev/api/package-names"
         candidates: list[HarvestCandidate] = []
         target = max(1, int(limit))
         while next_url and len(candidates) < target:
@@ -299,8 +317,15 @@ class RegistryHarvester:
                     break
             next_url = payload.get("nextUrl")
         inserted, updated = self.queue.upsert_many(candidates)
-        self.queue.set_cursor(source, cursor=str(next_url) if next_url else None)
-        return {"source": source, "discovered": len(candidates), "inserted": inserted, "updated": updated, "next_url": next_url}
+        self.queue.set_cursor(source, cursor=str(next_url) if next_url else "__COMPLETE__")
+        return {
+            "source": source,
+            "discovered": len(candidates),
+            "inserted": inserted,
+            "updated": updated,
+            "complete": next_url is None,
+            "next_url": next_url,
+        }
 
     def harvest_pypi(self, *, limit: int = 1000, full: bool = False) -> dict[str, Any]:
         if not full:
@@ -333,7 +358,7 @@ class RegistryHarvester:
         if key in {"rubygems", "gem"}:
             return self.harvest_rubygems_activity()
         if key in {"pub", "pubdev", "dart"}:
-            return self.harvest_pubdev(limit=limit)
+            return self.harvest_pubdev(limit=limit, full=full)
         if key in {"pypi", "python"}:
             return self.harvest_pypi(limit=limit, full=full)
         raise ValueError(f"no official bulk harvester yet for {registry!r}")
