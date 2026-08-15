@@ -33,9 +33,11 @@ def _repo_url(value: Any) -> str | None:
         return "https://github.com" + parsed.path.rstrip("/")
     if parsed.hostname in {"gitlab.com", "www.gitlab.com"}:
         return "https://gitlab.com" + parsed.path.rstrip("/")
-    # Only VCS-like URLs are repository evidence. Generic websites belong in
-    # official_website/documentation_url and must not increase repository confidence.
-    if parsed.scheme in {"git", "ssh"}:
+    # This helper is called only for fields whose semantics already mean source
+    # repository (e.g. PyPI Source/Repository, crates.io repository, NuGet
+    # repository). Therefore generic HTTPS VCS hosts must remain valid: Bitbucket,
+    # Codeberg, SourceHut and self-hosted Git are legitimate canonical repos.
+    if parsed.scheme and parsed.netloc:
         return url.rstrip("/")
     return None
 
