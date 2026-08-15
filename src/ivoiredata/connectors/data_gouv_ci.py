@@ -1,4 +1,4 @@
-"""Compatibility facade for the official Data Fair collector introduced in v0.8.2."""
+"""Compatibility facade for the official Data Fair collector."""
 from __future__ import annotations
 
 from .data_gouv_ci_v2 import (
@@ -14,17 +14,17 @@ from .data_gouv_ci_v2 import (
     _rows,
     _safe_table,
     _signature,
-    data_gouv_ci_resource_v2,
     dataset_id_from_public_url,
 )
+from .data_gouv_ci_v3 import data_gouv_ci_resource_v3
 
 # Keep the historical public name so engine/plugins do not need a breaking change.
-data_gouv_ci_resource = data_gouv_ci_resource_v2
+data_gouv_ci_resource = data_gouv_ci_resource_v3
 
 __all__ = [
     "API",
     "PORTAL",
     "data_gouv_ci_resource",
-    "data_gouv_ci_resource_v2",
+    "data_gouv_ci_resource_v3",
     "dataset_id_from_public_url",
 ]
