@@ -24,7 +24,7 @@ _SKIP_EXTENSIONS = {
 _METADATA_DENY_TOKENS = ("download", "microdata", "datafile", "data-file", "get-microdata", "get_microdata")
 _MIN_PDF_TEXT_CHARS = 80
 _ENCODED_TRAILING_WS = re.compile(r"(?:(?:%20)|(?:%09)|(?:%0a)|(?:%0d))+$", re.IGNORECASE)
-_UPLOAD_DIRECTORY = re.compile(r"/(?:uploads?|wp-content/uploads)(?:/[^/?#]+)*/$", re.IGNORECASE)
+_UPLOAD_DIRECTORY = re.compile(r"/(?:uploads?|wp-content/uploads)(?:/[^/?#]+)*/?$", re.IGNORECASE)
 
 
 class _HTMLTextAndLinks(HTMLParser):
