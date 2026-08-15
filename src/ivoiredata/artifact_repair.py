@@ -86,19 +86,18 @@ def execute_direct_phase(
     import requests
 
     results: list[dict[str, Any]] = []
-    for row in artifacts:
-        source_id = str(row.get("source_id") or "")
-        artifact_id = str(row.get("artifact_id") or "")
+    for plan_row in artifacts:
+        source_id = str(plan_row.get("source_id") or "")
+        artifact_id = str(plan_row.get("artifact_id") or "")
+        # The compact repair plan is for display. Pull the full ledger row here so a
+        # direct repair is anchored to the historical URL and SHA-256 stored as truth.
+        row = {**ledger.get(source_id, artifact_id), **plan_row}
         action = proposed_action(engine, row)
         if action == "TOMBSTONE_INVALID_LEGACY_URL":
-            try:
-                engine.upstreams.mark_removed(source_id, artifact_id)
-            finally:
-                ledger.mark_removed(
-                    source_id,
-                    artifact_id,
-                    reason="invalid legacy crawl URL (container URL or trailing encoded whitespace)",
-                )
+            updated = engine.upstreams.mark_removed(source_id, artifact_id)
+            # ingest_upstream_row updates an existing ledger row to REMOVED even when
+            # the upstream record was created only by this cleanup operation.
+            ledger.ingest_upstream_row(updated)
             results.append({
                 "source_id": source_id,
                 "artifact_id": artifact_id,
