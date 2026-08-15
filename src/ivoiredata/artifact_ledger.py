@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PHYSICAL_STATUSES = {"FETCHED", "VERIFIED", "UNCHANGED"}
 REPAIRABLE_STATUSES = {"LOCAL_MISSING", "CORRUPTED", "FAILED"}
-TERMINAL_NON_PHYSICAL = {"REMOVED", "DELETED", "EMPTY_VALID"}
+TERMINAL_NON_PHYSICAL = {"REMOVED", "DELETED", "EMPTY_VALID", "UPSTREAM_GHOST"}
 
 
 def _now() -> str:
@@ -32,9 +32,9 @@ def _sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
 class ArtifactLedger:
     """Physical truth ledger for upstream artifacts and synchronization runs.
 
-    The existing UpstreamState remains the connector cache/version state. This ledger is
-    deliberately separate: it answers whether the bytes that state refers to are really
-    present and valid on local storage, and records which source sync run observed them.
+    ``status`` describes the latest acquisition state. Verification is deliberately
+    independent: an artifact may be ``UNCHANGED`` on a later sync while remaining
+    cryptographically verified for the exact same local bytes.
     """
 
     def __init__(self, path: Path):
@@ -118,11 +118,36 @@ class ArtifactLedger:
                 );
                 """
             )
+            version = 1
+
+        if version < 2:
+            columns = {
+                str(item["name"])
+                for item in self.db.execute("PRAGMA table_info(artifacts)").fetchall()
+            }
+            if "verification_status" not in columns:
+                self.db.execute(
+                    "ALTER TABLE artifacts ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'UNVERIFIED'"
+                )
+            if "verified_sha256" not in columns:
+                self.db.execute("ALTER TABLE artifacts ADD COLUMN verified_sha256 TEXT")
+            # v1 used status=VERIFIED. verified_at was intentionally not overwritten by
+            # later upstream ingests, so deployed ledgers can recover this proof exactly.
             self.db.execute(
-                "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
-                (str(SCHEMA_VERSION),),
+                """
+                UPDATE artifacts
+                SET verification_status='VERIFIED', verified_sha256=sha256
+                WHERE verified_at IS NOT NULL OR status='VERIFIED'
+                """
             )
-            self.db.commit()
+            self.db.execute("UPDATE artifacts SET status='FETCHED' WHERE status='VERIFIED'")
+            version = 2
+
+        self.db.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+            (str(version),),
+        )
+        self.db.commit()
 
     @property
     def schema_version(self) -> int:
@@ -168,9 +193,11 @@ class ArtifactLedger:
 
     @staticmethod
     def _physical_state(row: dict[str, Any]) -> str:
-        if row.get("removed") or str(row.get("last_result") or "").upper() == "REMOVED_UPSTREAM":
-            return "REMOVED"
         last_result = str(row.get("last_result") or "").upper()
+        if row.get("removed") or last_result == "REMOVED_UPSTREAM":
+            return "REMOVED"
+        if last_result == "UPSTREAM_GHOST":
+            return "UPSTREAM_GHOST"
         if last_result == "ERROR" or row.get("error"):
             return "FAILED"
         claimed = bool(row.get("downloaded")) or last_result in {"DOWNLOADED", "UNCHANGED"}
@@ -189,15 +216,30 @@ class ArtifactLedger:
         now = _now()
         status = self._physical_state(row)
         local_path = str(row.get("local_path") or "").strip() or None
+        incoming_sha = str(row.get("sha256") or "").strip() or None
         size = row.get("size_bytes")
+        existing = self.get(source_id, artifact_id)
+        effective_sha = incoming_sha or (str(existing.get("sha256") or "").strip() or None)
+        effective_path = local_path or (str(existing.get("local_path") or "").strip() or None)
+        preserve_verification = bool(
+            existing
+            and str(existing.get("verification_status") or "") == "VERIFIED"
+            and str(existing.get("verified_sha256") or "") == str(effective_sha or "")
+            and str(existing.get("local_path") or "") == str(effective_path or "")
+            and status in PHYSICAL_STATUSES
+        )
+        verification_status = "VERIFIED" if preserve_verification else "UNVERIFIED"
+        verified_at = existing.get("verified_at") if preserve_verification else None
+        verified_sha256 = existing.get("verified_sha256") if preserve_verification else None
+
         self.db.execute(
             """
             INSERT INTO artifacts(
                 source_id,artifact_id,upstream_id,upstream_url,artifact_type,status,
                 upstream_signature,etag,last_modified,sha256,size_bytes,local_path,
-                first_seen_at,last_checked_at,downloaded_at,verified_at,http_status,
-                fetch_method,error,last_run_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                first_seen_at,last_checked_at,downloaded_at,verified_at,verification_status,
+                verified_sha256,http_status,fetch_method,error,last_run_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(source_id,artifact_id) DO UPDATE SET
                 upstream_id=COALESCE(excluded.upstream_id,artifacts.upstream_id),
                 upstream_url=COALESCE(excluded.upstream_url,artifacts.upstream_url),
@@ -211,6 +253,9 @@ class ArtifactLedger:
                 local_path=COALESCE(excluded.local_path,artifacts.local_path),
                 last_checked_at=COALESCE(excluded.last_checked_at,artifacts.last_checked_at),
                 downloaded_at=COALESCE(excluded.downloaded_at,artifacts.downloaded_at),
+                verified_at=excluded.verified_at,
+                verification_status=excluded.verification_status,
+                verified_sha256=excluded.verified_sha256,
                 http_status=excluded.http_status,
                 fetch_method=COALESCE(excluded.fetch_method,artifacts.fetch_method),
                 error=excluded.error,
@@ -226,13 +271,15 @@ class ArtifactLedger:
                 str(row.get("signature") or "").strip() or None,
                 str(row.get("etag") or "").strip() or None,
                 str(row.get("last_modified") or "").strip() or None,
-                str(row.get("sha256") or "").strip() or None,
+                incoming_sha,
                 int(size) if size not in (None, "") else None,
                 local_path,
-                now,
+                existing.get("first_seen_at") if existing else now,
                 str(row.get("last_checked") or now),
                 str(row.get("last_downloaded") or "").strip() or None,
-                None,
+                verified_at,
+                verification_status,
+                verified_sha256,
                 int(row["http_status"]) if row.get("http_status") is not None else None,
                 str(row.get("method") or "").strip() or None,
                 str(row.get("error") or "").strip()[-2000:] or None,
@@ -314,13 +361,23 @@ class ArtifactLedger:
                 )
                 corrupted += 1
                 continue
+            restored_status = "FETCHED" if status in {"LOCAL_MISSING", "CORRUPTED"} else status
             self.db.execute(
                 """
-                UPDATE artifacts SET status='VERIFIED', sha256=?, size_bytes=?, verified_at=?,
-                    last_checked_at=?, error=NULL
+                UPDATE artifacts SET status=?, sha256=?, size_bytes=?, verified_at=?,
+                    verification_status='VERIFIED', verified_sha256=?, last_checked_at=?, error=NULL
                 WHERE source_id=? AND artifact_id=?
                 """,
-                (actual_hash, actual_size, _now(), _now(), row["source_id"], row["artifact_id"]),
+                (
+                    restored_status,
+                    actual_hash,
+                    actual_size,
+                    _now(),
+                    actual_hash,
+                    _now(),
+                    row["source_id"],
+                    row["artifact_id"],
+                ),
             )
             self.db.commit()
             verified += 1
@@ -338,10 +395,21 @@ class ArtifactLedger:
     def _set_verification(self, row: dict[str, Any], status: str, *, error: str) -> None:
         self.db.execute(
             """
-            UPDATE artifacts SET status=?, verified_at=NULL, last_checked_at=?, error=?
+            UPDATE artifacts SET status=?, verification_status='FAILED', verified_sha256=NULL,
+                verified_at=NULL, last_checked_at=?, error=?
             WHERE source_id=? AND artifact_id=?
             """,
             (status, _now(), error[-2000:], row["source_id"], row["artifact_id"]),
+        )
+        self.db.commit()
+
+    def mark_removed(self, source_id: str, artifact_id: str, *, reason: str | None = None) -> None:
+        self.db.execute(
+            """
+            UPDATE artifacts SET status='REMOVED', last_checked_at=?, error=?
+            WHERE source_id=? AND artifact_id=?
+            """,
+            (_now(), str(reason)[-2000:] if reason else None, source_id, artifact_id),
         )
         self.db.commit()
 
@@ -378,8 +446,16 @@ class ArtifactLedger:
             f"SELECT status, COUNT(*) AS n FROM artifacts{where} GROUP BY status ORDER BY status",
             params,
         ).fetchall()
+        verification_rows = self.db.execute(
+            f"SELECT verification_status, COUNT(*) AS n FROM artifacts{where} GROUP BY verification_status ORDER BY verification_status",
+            params,
+        ).fetchall()
         summary_row = self.db.execute(
-            f"SELECT COUNT(*) AS n, COALESCE(SUM(size_bytes),0) AS bytes FROM artifacts{where}",
+            f"""
+            SELECT COUNT(*) AS n, COALESCE(SUM(size_bytes),0) AS bytes,
+                   SUM(CASE WHEN verification_status='VERIFIED' THEN 1 ELSE 0 END) AS verified
+            FROM artifacts{where}
+            """,
             params,
         ).fetchone()
         missing_paths = 0
@@ -407,6 +483,10 @@ class ArtifactLedger:
             "artifacts": int(summary_row["n"] or 0),
             "bytes_recorded": int(summary_row["bytes"] or 0),
             "by_status": {str(row["status"]): int(row["n"]) for row in status_rows},
+            "verification_by_status": {
+                str(row["verification_status"]): int(row["n"]) for row in verification_rows
+            },
+            "verified_artifacts": int(summary_row["verified"] or 0),
             "claimed_physical": claimed_physical,
             "missing_physical_paths": missing_paths,
             "recent_runs": recent_runs,
