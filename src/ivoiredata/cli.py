@@ -4,6 +4,7 @@ import argparse
 import json
 
 from .artifact_ledger import ArtifactLedger
+from .artifact_repair import annotate_plan, execute_direct_phase
 from .artifact_runtime import ingest_existing_upstreams
 from .data_gouv_audit import data_gouv_coverage_audit
 from .delivery import inventory, source_paths
@@ -31,9 +32,9 @@ def parser():
     a = artifact_sub.add_parser("verify", help="verify local files, sizes and SHA-256 hashes")
     a.add_argument("--source-id", default=None)
     a.add_argument("--limit", type=int, default=None, help="maximum ledger rows to verify")
-    a = artifact_sub.add_parser("repair", help="plan or execute targeted source re-sync for missing/corrupt/failed artifacts")
+    a = artifact_sub.add_parser("repair", help="repair physical artifacts directly when safe, then re-sync remaining sources")
     a.add_argument("--source-id", default=None)
-    a.add_argument("--execute", action="store_true", help="actually re-sync affected public sources with force=true")
+    a.add_argument("--execute", action="store_true", help="perform bounded direct repair and re-sync unresolved public sources")
     a.add_argument("--max-sources", type=int, default=20, help="safety cap for --execute")
 
     dg = sub.add_parser("data-gouv", help="Data.gouv CI physical acquisition and coverage controls")
@@ -180,6 +181,15 @@ def _programming_docs_control(engine: IvoireDataEngine, args) -> int:
     raise SystemExit(f"unknown programming-docs action: {action}")
 
 
+def _plan_with_actions(engine: IvoireDataEngine, ledger: ArtifactLedger, source_id: str | None) -> dict:
+    plan = ledger.repair_plan(source_id=source_id)
+    full_rows = []
+    for row in plan.get("artifacts", []):
+        full_rows.append({**ledger.get(str(row["source_id"]), str(row["artifact_id"])), **row})
+    plan["artifacts"] = annotate_plan(engine, full_rows)
+    return plan
+
+
 def _artifacts_control(engine: IvoireDataEngine, args) -> int:
     source_id = getattr(args, "source_id", None)
     if source_id:
@@ -199,12 +209,13 @@ def _artifacts_control(engine: IvoireDataEngine, args) -> int:
             print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
             return 1 if payload.get("local_missing") or payload.get("corrupted") else 0
         if action == "repair":
-            plan = ledger.repair_plan(source_id=source_id)
+            plan = _plan_with_actions(engine, ledger, source_id)
             plan["upstream_rows_imported"] = imported
             if not args.execute:
                 plan["executed"] = False
                 print(json.dumps(plan, indent=2, ensure_ascii=False, default=str))
                 return 0
+
             source_ids = list(plan.get("source_ids", []))
             max_sources = max(1, int(args.max_sources))
             if len(source_ids) > max_sources:
@@ -212,24 +223,32 @@ def _artifacts_control(engine: IvoireDataEngine, args) -> int:
                     f"repair would touch {len(source_ids)} sources; safety cap is {max_sources}. "
                     "Use --source-id or increase --max-sources explicitly."
                 )
-            results = []
-            for sid in source_ids:
+
+            direct_results = execute_direct_phase(engine, ledger, list(plan.get("artifacts", [])))
+            remaining = _plan_with_actions(engine, ledger, source_id)
+            sync_results = []
+            for sid in list(remaining.get("source_ids", [])):
                 spec = engine.registry.get(sid)
                 if not spec.enabled or not spec.public:
-                    results.append({"source_id": sid, "status": "SKIPPED_NOT_PUBLIC_ENABLED"})
+                    sync_results.append({"source_id": sid, "status": "SKIPPED_NOT_PUBLIC_ENABLED"})
                     continue
                 result = engine.sync(sid, force=True)
-                results.append(result.__dict__)
+                sync_results.append(result.__dict__)
+
             ingest_existing_upstreams(engine, source_id)
             verification = ledger.verify(source_id=source_id)
+            remaining_after = _plan_with_actions(engine, ledger, source_id)
             payload = {
                 "executed": True,
                 "plan": plan,
-                "sync_results": results,
+                "direct_results": direct_results,
+                "remaining_before_resync": remaining,
+                "sync_results": sync_results,
                 "verification": verification,
+                "remaining_after": remaining_after,
             }
             print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
-            return 1 if verification.get("local_missing") or verification.get("corrupted") else 0
+            return 1 if int(remaining_after.get("repairable_artifacts") or 0) else 0
         raise SystemExit(f"unknown artifacts action: {action}")
     finally:
         ledger.close()
