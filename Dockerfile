@@ -26,7 +26,7 @@ ARG PGID
 LABEL org.opencontainers.image.title="IvoireData" \
       org.opencontainers.image.description="Moteur local de collecte incrémentale et qualification CI Gold de données Côte d'Ivoire" \
       org.opencontainers.image.source="https://github.com/bozz33/IvoireData" \
-      org.opencontainers.image.version="0.8.3" \
+      org.opencontainers.image.version="0.8.4" \
       org.opencontainers.image.licenses="MIT"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
