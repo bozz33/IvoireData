@@ -5,6 +5,9 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from . import __version__
+from .artifact_ledger import ArtifactLedger
+from .artifact_runtime import ingest_existing_upstreams
 from .delivery import inventory, source_paths
 from .discoveries import data_gouv_discoveries
 from .engine import IvoireDataEngine
@@ -12,7 +15,7 @@ from .query import query_source_sql
 from .ranking import rank_sources
 from .search import search_documents
 
-app = FastAPI(title="IvoireData Engine", version="0.8.3")
+app = FastAPI(title="IvoireData Engine", version=__version__)
 
 
 class SQLRequest(BaseModel):
@@ -38,12 +41,13 @@ def health():
     return {
         "status": "ok",
         "engine": "IvoireData",
-        "version": "0.8.3",
+        "version": __version__,
         "storage": "local",
         "scope": "CIV_PLUS_GLOBAL_PROGRAMMING_DOCS",
         "programming_docs_sources": len(docs),
         "data_dir": str(engine.settings.data_dir),
         "incremental_upstream_state": str(engine.settings.upstream_state_path),
+        "artifact_ledger": str(engine.settings.artifact_ledger_path),
     }
 
 
@@ -96,6 +100,22 @@ def upstreams(source_id: str | None = None):
 def upstream_source(source_id: str):
     try: return IvoireDataEngine().upstream_audit(source_id)
     except KeyError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/artifacts")
+def artifacts(source_id: str | None = None):
+    engine = IvoireDataEngine()
+    if source_id:
+        try: engine.registry.get(source_id)
+        except KeyError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
+    imported = ingest_existing_upstreams(engine, source_id)
+    ledger = ArtifactLedger(engine.settings.artifact_ledger_path)
+    try:
+        payload = ledger.audit(source_id=source_id)
+        payload["upstream_rows_imported"] = imported
+        return payload
+    finally:
+        ledger.close()
 
 
 @app.get("/discoveries")

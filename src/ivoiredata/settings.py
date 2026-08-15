@@ -18,7 +18,7 @@ class Settings:
     ci_gold_runtime_path: Path = Path("configs/ci_gold_sources.json")
     programming_docs_runtime_path: Path = Path("configs/programming_docs_sources.json")
     ci_coverage_path: Path = Path("configs/ci_coverage.json")
-    user_agent: str = "IvoireData/0.8.3 (+https://github.com/bozz33/IvoireData)"
+    user_agent: str = "IvoireData/0.8.4 (+https://github.com/bozz33/IvoireData)"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -50,6 +50,11 @@ class Settings:
     def upstream_state_path(self) -> Path:
         configured = os.getenv("IVOIREDATA_UPSTREAM_STATE")
         return Path(configured) if configured else self.state_dir / "upstreams.json"
+
+    @property
+    def artifact_ledger_path(self) -> Path:
+        configured = os.getenv("IVOIREDATA_ARTIFACT_LEDGER")
+        return Path(configured) if configured else self.state_dir / "artifact_ledger.sqlite3"
 
     @property
     def registry_overlay_paths(self) -> list[Path]:

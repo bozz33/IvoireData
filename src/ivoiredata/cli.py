@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 
+from .artifact_ledger import ArtifactLedger
+from .artifact_runtime import ingest_existing_upstreams
 from .delivery import inventory, source_paths
 from .discoveries import data_gouv_discoveries
 from .engine import IvoireDataEngine
@@ -12,7 +14,7 @@ from .scheduler import run_forever, run_once
 
 def parser():
     p = argparse.ArgumentParser(prog="ivoiredata", description="IvoireData local source collection, CI Gold and official programming documentation engine")
-    p.add_argument("--version", action="version", version="ivoiredata 0.8.3")
+    p.add_argument("--version", action="version", version="ivoiredata 0.8.4")
     sub = p.add_subparsers(dest="command", required=True)
     s = sub.add_parser("sources"); s.add_argument("--public", action="store_true"); s.add_argument("--all", action="store_true", help="include disabled sources")
     s = sub.add_parser("status"); s.add_argument("--public", action="store_true"); s.add_argument("--all", action="store_true", help="include disabled sources")
@@ -20,6 +22,19 @@ def parser():
     sub.add_parser("coverage-audit")
     sub.add_parser("quality-audit")
     s = sub.add_parser("upstreams", help="audit persistent upstream cache/version state"); s.add_argument("source_id", nargs="?")
+
+    artifacts = sub.add_parser("artifacts", help="audit physical upstream artifacts stored locally")
+    artifact_sub = artifacts.add_subparsers(dest="artifacts_action", required=True)
+    a = artifact_sub.add_parser("audit", help="summarize Artifact Ledger physical state")
+    a.add_argument("--source-id", default=None)
+    a = artifact_sub.add_parser("verify", help="verify local files, sizes and SHA-256 hashes")
+    a.add_argument("--source-id", default=None)
+    a.add_argument("--limit", type=int, default=None, help="maximum ledger rows to verify")
+    a = artifact_sub.add_parser("repair", help="plan or execute targeted source re-sync for missing/corrupt/failed artifacts")
+    a.add_argument("--source-id", default=None)
+    a.add_argument("--execute", action="store_true", help="actually re-sync affected public sources with force=true")
+    a.add_argument("--max-sources", type=int, default=20, help="safety cap for --execute")
+
     s = sub.add_parser("discoveries"); s.add_argument("--limit", type=int, default=100, help="maximum unmapped Data.gouv discoveries to display")
     s = sub.add_parser("ci-gold"); s.add_argument("--write", action="store_true", help="write qualification artifacts under data_lake/reports/ci-gold")
     sub.add_parser("inventory")
@@ -160,6 +175,63 @@ def _programming_docs_control(engine: IvoireDataEngine, args) -> int:
     raise SystemExit(f"unknown programming-docs action: {action}")
 
 
+def _artifacts_control(engine: IvoireDataEngine, args) -> int:
+    source_id = getattr(args, "source_id", None)
+    if source_id:
+        engine.registry.get(source_id)
+    imported = ingest_existing_upstreams(engine, source_id)
+    ledger = ArtifactLedger(engine.settings.artifact_ledger_path)
+    try:
+        action = args.artifacts_action
+        if action == "audit":
+            payload = ledger.audit(source_id=source_id)
+            payload["upstream_rows_imported"] = imported
+            print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+            return 0
+        if action == "verify":
+            payload = ledger.verify(source_id=source_id, limit=args.limit)
+            payload["upstream_rows_imported"] = imported
+            print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+            return 1 if payload.get("local_missing") or payload.get("corrupted") else 0
+        if action == "repair":
+            plan = ledger.repair_plan(source_id=source_id)
+            plan["upstream_rows_imported"] = imported
+            if not args.execute:
+                plan["executed"] = False
+                print(json.dumps(plan, indent=2, ensure_ascii=False, default=str))
+                return 0
+            source_ids = list(plan.get("source_ids", []))
+            max_sources = max(1, int(args.max_sources))
+            if len(source_ids) > max_sources:
+                raise SystemExit(
+                    f"repair would touch {len(source_ids)} sources; safety cap is {max_sources}. "
+                    "Use --source-id or increase --max-sources explicitly."
+                )
+            results = []
+            for sid in source_ids:
+                spec = engine.registry.get(sid)
+                if not spec.enabled or not spec.public:
+                    results.append({"source_id": sid, "status": "SKIPPED_NOT_PUBLIC_ENABLED"})
+                    continue
+                result = engine.sync(sid, force=True)
+                results.append(result.__dict__)
+            # The sync wrapper has already recorded new upstream state; re-importing here
+            # also covers sources whose connector did not create any new run artifacts.
+            ingest_existing_upstreams(engine, source_id)
+            verification = ledger.verify(source_id=source_id)
+            payload = {
+                "executed": True,
+                "plan": plan,
+                "sync_results": results,
+                "verification": verification,
+            }
+            print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+            return 1 if verification.get("local_missing") or verification.get("corrupted") else 0
+        raise SystemExit(f"unknown artifacts action: {action}")
+    finally:
+        ledger.close()
+
+
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
     engine = IvoireDataEngine()
@@ -185,6 +257,7 @@ def main(argv=None) -> int:
     if args.command == "coverage-audit": print(json.dumps(engine.coverage_audit(), ensure_ascii=False, indent=2)); return 0
     if args.command == "quality-audit": print(json.dumps(engine.quality_audit(), ensure_ascii=False, indent=2)); return 0
     if args.command == "upstreams": print(json.dumps(engine.upstream_audit(args.source_id), ensure_ascii=False, indent=2, default=str)); return 0
+    if args.command == "artifacts": return _artifacts_control(engine, args)
     if args.command == "discoveries": print(json.dumps(data_gouv_discoveries(engine, limit=args.limit), ensure_ascii=False, indent=2)); return 0
     if args.command == "ci-gold":
         payload = engine.write_ci_gold() if args.write else engine.ci_gold()
