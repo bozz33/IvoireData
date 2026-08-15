@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
-
 from .artifact_ledger import ArtifactLedger
 from .engine import IvoireDataEngine
+from .http_client import http_run_context
 
 
 _ORIGINAL_SYNC = IvoireDataEngine.sync
@@ -25,21 +24,44 @@ def _sync_with_artifact_ledger(self: IvoireDataEngine, source_id: str, *, force:
     spec = self.registry.get(source_id)
     ledger = ArtifactLedger(self.settings.artifact_ledger_path)
     run_id = ledger.start_run(source_id, connector=spec.connector, force=force)
+    http_ctx = http_run_context(
+        source_id=source_id,
+        run_id=run_id,
+        state_dir=self.settings.state_dir,
+        user_agent=self.settings.user_agent,
+        options=spec.options,
+    )
     try:
-        result = _ORIGINAL_SYNC(self, source_id, force=force)
+        with http_ctx:
+            result = _ORIGINAL_SYNC(self, source_id, force=force)
+        http_metrics = http_ctx.snapshot()
         ledger.ingest_upstream_rows(self.upstreams.source_rows(source_id), run_id=run_id)
+        budget_exceeded = bool(http_metrics.get("budget_exceeded"))
+        run_status = "PARTIAL_BUDGET" if budget_exceeded else str(result.status or "UNKNOWN").upper()
+        run_error = (
+            str(http_metrics.get("budget_reason") or result.details)
+            if budget_exceeded or str(result.status).lower() != "success"
+            else None
+        )
         ledger.finish_run(
             run_id,
-            status=str(result.status or "UNKNOWN").upper(),
-            error=result.details if str(result.status).lower() != "success" else None,
+            status=run_status,
+            error=run_error,
+            http_metrics=http_metrics,
         )
         return result
     except BaseException as exc:
-        # Keep the run ledger useful even for interrupts/system-level failures that
-        # happen outside the engine's normal exception-to-SyncResult path.
+        # Keep both ledgers useful even for interrupts/system-level failures outside the
+        # engine's normal exception-to-SyncResult path.
+        http_metrics = http_ctx.snapshot()
         try:
             ledger.ingest_upstream_rows(self.upstreams.source_rows(source_id), run_id=run_id)
-            ledger.finish_run(run_id, status="ABORTED", error=str(exc))
+            ledger.finish_run(
+                run_id,
+                status="PARTIAL_BUDGET" if http_metrics.get("budget_exceeded") else "ABORTED",
+                error=str(http_metrics.get("budget_reason") or exc),
+                http_metrics=http_metrics,
+            )
         finally:
             ledger.close()
         raise
