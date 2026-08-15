@@ -15,6 +15,7 @@ jobs:
       - run: pytest -q
       - run: ivoiredata --help
       - run: ivoiredata artifacts audit
+      - run: ivoiredata data-gouv --help
       - run: ivoiredata programming-docs languages
       - run: ivoiredata programming-docs audit
       - run: ivoiredata-tech --help
