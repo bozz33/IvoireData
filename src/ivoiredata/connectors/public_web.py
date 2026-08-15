@@ -87,12 +87,7 @@ def _is_upload_directory(url: str) -> bool:
 
 
 def _retire_invalid_legacy_artifacts(upstream: UpstreamState, source_id: str) -> int:
-    """Tombstone crawl artifacts that were created from malformed/container URLs.
-
-    Older runs could retain an URL ending in encoded whitespace (for example ``%20``)
-    or an upload-directory URL such as ``/uploads/publications/``.  Those are not valid
-    document identities and otherwise remain forever in the physical repair queue.
-    """
+    """Tombstone crawl artifacts created from malformed/container URLs."""
     retired = 0
     for row in upstream.source_rows(source_id):
         artifact_id = str(row.get("artifact_id") or "")
@@ -190,6 +185,56 @@ def _cached_body(upstream: UpstreamState | None, source_id: str, artifact: str, 
     return path, raw
 
 
+def _backfill_same_digest_body(
+    upstream: UpstreamState,
+    *,
+    source_id: str,
+    artifact: str,
+    current: str,
+    response_url: str,
+    response_headers: dict,
+    content_type: str,
+    raw: bytes,
+    digest: str,
+    links: list[str],
+    cached: dict,
+    snapshot_dir: Path | None,
+) -> dict:
+    """Persist an already-committed body that is missing from physical storage.
+
+    Older runs may have a dlt content hash without a retained raw snapshot. In that case
+    receiving the same SHA again must establish physical truth instead of declaring
+    UNCHANGED and throwing the response body away.
+    """
+    snapshot = save_snapshot(
+        snapshot_dir,
+        source_id=source_id,
+        url=current,
+        content=raw,
+        content_type=content_type or None,
+    )
+    upstream.mark_downloaded(
+        source_id,
+        artifact,
+        url=response_url,
+        signature=digest,
+        sha256=digest,
+        size_bytes=len(raw),
+        etag=response_headers.get("etag"),
+        last_modified=response_headers.get("last-modified"),
+        method="PHYSICAL_BACKFILL_SAME_SHA",
+        rows=int(cached.get("rows") or 0),
+        local_path=str(snapshot.get("local_path") or "") or None,
+        extra={
+            "cached_links": links or list(cached.get("cached_links") or []),
+            "content_type": content_type or None,
+            "body_changed": False,
+            "physical_backfill": True,
+        },
+    )
+    return snapshot
+
+
 def public_document_resource(
     *,
     source_id: str,
@@ -205,14 +250,7 @@ def public_document_resource(
     metadata_base: dict | None = None,
     upstream_state_path: Path | None = None,
 ):
-    """Crawl public documents incrementally with crash-safe local replay.
-
-    `force` means "check now", never "download identical bytes again". ETag and
-    Last-Modified are used when the matching body is committed or when an integrity-
-    checked local snapshot is available for replay. Thus a crash after body transfer but
-    before dlt commit can be repaired from disk after a 304 without transferring the body
-    a second time. Servers without validators are deduplicated by SHA-256.
-    """
+    """Crawl public documents incrementally with crash-safe local replay."""
     import dlt
     import requests
     from pypdf import PdfReader
@@ -260,10 +298,9 @@ def public_document_resource(
             committed_digest = state.get(current)
             cached_path, cached_raw = _cached_body(upstream, source_id, artifact, cached)
             headers = {"User-Agent": user_agent}
-            if upstream and (
-                (committed_digest and cached.get("signature") == committed_digest)
-                or cached_raw is not None
-            ):
+            # Never ask for a 304 unless we already have an integrity-checked local body.
+            # A validator plus dlt state is not physical storage proof.
+            if upstream and cached_raw is not None and cached_path is not None:
                 headers.update(upstream.conditional_headers(source_id, artifact))
 
             replayed_from_cache = False
@@ -275,19 +312,21 @@ def public_document_resource(
             try:
                 response = session.get(current, timeout=120, headers=headers)
                 if response.status_code == 304:
-                    if committed_digest and cached.get("signature") == committed_digest:
-                        fetched += 1
-                        cached_links = list(cached.get("cached_links") or [])
-                        if upstream:
-                            upstream.mark_http_unchanged(
-                                source_id, artifact, url=current,
-                                extra={"signature": committed_digest, "cached_links": cached_links},
-                            )
-                        for candidate in cached_links:
-                            if candidate not in seen:
-                                queue.append(str(candidate))
-                        continue
                     if cached_raw is not None and cached_path is not None:
+                        if committed_digest and cached.get("signature") == committed_digest:
+                            fetched += 1
+                            cached_links = list(cached.get("cached_links") or [])
+                            if upstream:
+                                upstream.mark_http_unchanged(
+                                    source_id,
+                                    artifact,
+                                    url=current,
+                                    extra={"signature": committed_digest, "cached_links": cached_links},
+                                )
+                            for candidate in cached_links:
+                                if candidate not in seen:
+                                    queue.append(str(candidate))
+                            continue
                         raw = cached_raw
                         replayed_from_cache = True
                         response_url = str(cached.get("url") or current)
@@ -297,6 +336,8 @@ def public_document_resource(
                             "last-modified": cached.get("last_modified"),
                         }
                     else:
+                        # Defensive fallback for a non-compliant/proxy cache: obtain the
+                        # body unconditionally because no local raw bytes exist.
                         response = session.get(current, timeout=120, headers={"User-Agent": user_agent})
                         response.raise_for_status()
                 else:
@@ -304,7 +345,10 @@ def public_document_resource(
             except requests.exceptions.RequestException as exc:
                 if upstream:
                     upstream.mark_error(
-                        source_id, artifact, url=current, error=str(exc),
+                        source_id,
+                        artifact,
+                        url=current,
+                        error=str(exc),
                         status_code=getattr(getattr(exc, "response", None), "status_code", None),
                         method="HTTP_DOCUMENT",
                     )
@@ -344,11 +388,33 @@ def public_document_resource(
             if committed_digest == digest:
                 cached_links = links or list(cached.get("cached_links") or [])
                 if upstream:
-                    upstream.mark_unchanged(
-                        source_id, artifact, signature=digest, url=response_url, reason="SHA256",
-                        etag=response_headers.get("etag"), last_modified=response_headers.get("last-modified"),
-                        extra={"cached_links": cached_links, "content_type": ctype or None},
-                    )
+                    if cached_raw is not None and cached_path is not None:
+                        upstream.mark_unchanged(
+                            source_id,
+                            artifact,
+                            signature=digest,
+                            url=response_url,
+                            reason="SHA256_AND_LOCAL_SNAPSHOT",
+                            etag=response_headers.get("etag"),
+                            last_modified=response_headers.get("last-modified"),
+                            extra={"cached_links": cached_links, "content_type": ctype or None},
+                        )
+                    else:
+                        _backfill_same_digest_body(
+                            upstream,
+                            source_id=source_id,
+                            artifact=artifact,
+                            current=current,
+                            response_url=response_url,
+                            response_headers=response_headers,
+                            content_type=ctype,
+                            raw=raw,
+                            digest=digest,
+                            links=cached_links,
+                            cached=cached,
+                            snapshot_dir=snapshot_dir,
+                        )
+                state[current] = digest
                 for candidate in cached_links:
                     if candidate not in seen:
                         queue.append(str(candidate))
@@ -395,7 +461,8 @@ def public_document_resource(
             state[current] = digest
             if upstream:
                 upstream.mark_downloaded(
-                    source_id, artifact,
+                    source_id,
+                    artifact,
                     url=response_url,
                     signature=digest,
                     sha256=digest,
