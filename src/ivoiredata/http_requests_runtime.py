@@ -41,6 +41,9 @@ def _instrumented_request(self: requests.Session, method: str, url: str, **kwarg
 
     _configure_session(self, context)
     context.before_request(url)
+    # Persist the logical request before entering potentially long/blocking network I/O.
+    # A crash/kill during the request therefore leaves a useful last checkpoint.
+    context.checkpoint("RUNNING")
     kwargs.setdefault(
         "timeout",
         (context.policy.connect_timeout_seconds, context.policy.read_timeout_seconds),
