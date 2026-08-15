@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ivoiredata.connectors.data_gouv_ci_v2 import _discover_official, _lines_download_official
+from ivoiredata.connectors.data_gouv_ci_v2 import _discover_official, _lines_download_streaming
 from ivoiredata.connectors.faostat import _catalog_rows, _file_size_bytes, _signature as fao_signature, _table_name
 from ivoiredata.connectors.ilostat import _fetch_indicator
 from ivoiredata.state_io import atomic_write_json, load_json
@@ -94,14 +94,15 @@ def test_datafair_lines_follows_official_next_cursor(tmp_path: Path):
             url="https://data.gouv.ci/data-fair/api/v1/datasets/demo/lines?after=2&size=2",
         ),
     ])
-    rows, snapshot, _ = _lines_download_official(
+    materialized = _lines_download_streaming(
         session, "demo", snapshot_dir=tmp_path, source_id="civ_datagouv_catalog", page_size=2
     )
-    assert [row["id"] for row in rows] == [1, 2, 3]
+    assert [row["id"] for row in materialized.rows()] == [1, 2, 3]
     assert session.calls[0]["params"]["page"] == 1
     assert session.calls[1]["params"] is None
     assert "after=2" in session.calls[1]["url"]
-    assert snapshot and Path(str(snapshot["local_path"])).exists()
+    assert materialized.path.exists()
+    assert materialized.method == "LINES_STREAM"
 
 
 def test_ilostat_indicator_request_has_id_and_ref_area():
