@@ -33,7 +33,9 @@ def _repo_url(value: Any) -> str | None:
         return "https://github.com" + parsed.path.rstrip("/")
     if parsed.hostname in {"gitlab.com", "www.gitlab.com"}:
         return "https://gitlab.com" + parsed.path.rstrip("/")
-    if parsed.scheme and parsed.netloc:
+    # Only VCS-like URLs are repository evidence. Generic websites belong in
+    # official_website/documentation_url and must not increase repository confidence.
+    if parsed.scheme in {"git", "ssh"}:
         return url.rstrip("/")
     return None
 
@@ -44,7 +46,7 @@ def _project_urls(info: dict[str, Any]) -> tuple[str | None, str | None, str | N
         urls = {}
     lowered = {str(k).casefold(): str(v) for k, v in urls.items() if v}
     repo = None
-    for label in ("source", "source code", "repository", "github", "code"):
+    for label in ("source", "source code", "repository", "github", "gitlab", "code"):
         if lowered.get(label):
             repo = _repo_url(lowered[label])
             if repo:
@@ -238,7 +240,10 @@ def _nuget(session: requests.Session, name: str, user_agent: str) -> dict[str, A
     stable = [entry for entry in leaves if entry.get("version") and entry.get("listed", True) and not _is_prerelease(str(entry["version"]))]
     current = max(stable, key=lambda item: _version_key(str(item.get("version")))) if stable else (leaves[-1] if leaves else {})
     project = current.get("projectUrl")
-    repo = _repo_url(current.get("repository") or project)
+    # NuGet's projectUrl is explicitly a project/home page, not VCS metadata.
+    # A repository is accepted only from an actual repository object/URL when the
+    # feed exposes one. This prevents docs.microsoft.com URLs from becoming repos.
+    repo = _repo_url(current.get("repository"))
     return {
         "authority_source": "nuget",
         "native_registry_url": url,
@@ -246,7 +251,7 @@ def _nuget(session: requests.Session, name: str, user_agent: str) -> dict[str, A
         "latest_stable_version": str(current.get("version") or "").strip() or None,
         "canonical_repository": repo,
         "documentation_url": current.get("readmeUrl"),
-        "official_website": str(project) if project and not repo else None,
+        "official_website": str(project) if project else None,
     }
 
 
