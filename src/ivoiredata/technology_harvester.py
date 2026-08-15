@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,8 +10,40 @@ from typing import Any, Iterable
 import requests
 
 
+NPM_REPLICATION_ROOTS = (
+    "https://replicate.npmjs.com/",
+    "https://replicate.npmjs.com/registry/",
+)
+NPM_ALL_DOCS_URL = "https://replicate.npmjs.com/registry/_all_docs"
+NPM_CHANGES_URL = "https://replicate.npmjs.com/registry/_changes"
+NPM_BOOTSTRAP_SOURCE = "npm-all-docs"
+NPM_CHANGES_SOURCE = "npm-changes"
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _cursor_json(value: Any) -> dict[str, Any]:
+    text = str(value or "").strip()
+    if not text:
+        return {}
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _dump_cursor(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _npm_package_name(value: Any) -> str | None:
+    name = str(value or "").strip()
+    if not name or name.startswith("_design/") or name.startswith("_local/"):
+        return None
+    return name
 
 
 @dataclass(frozen=True)
@@ -23,6 +56,7 @@ class HarvestCandidate:
     type_hint: str | None = None
     abandoned: str | None = None
     requeue: bool = False
+    seen_token: str | None = None
 
 
 class TechnologyHarvestQueue:
@@ -35,7 +69,7 @@ class TechnologyHarvestQueue:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path)
+        self.db = sqlite3.connect(self.path, timeout=60)
         self.db.row_factory = sqlite3.Row
         self._init_schema()
 
@@ -44,6 +78,7 @@ class TechnologyHarvestQueue:
             """
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
+            PRAGMA busy_timeout=60000;
             CREATE TABLE IF NOT EXISTS candidates (
                 registry TEXT NOT NULL,
                 name TEXT NOT NULL,
@@ -70,56 +105,169 @@ class TechnologyHarvestQueue:
             );
             """
         )
+        columns = {
+            str(row["name"])
+            for row in self.db.execute("PRAGMA table_info(candidates)").fetchall()
+        }
+        if "last_seen_token" not in columns:
+            self.db.execute("ALTER TABLE candidates ADD COLUMN last_seen_token TEXT")
         self.db.commit()
 
     def close(self) -> None:
         self.db.close()
 
+    def _upsert_one(self, candidate: HarvestCandidate, *, now: str) -> bool:
+        previous = self.db.execute(
+            "SELECT status FROM candidates WHERE registry=? AND name=?",
+            (candidate.registry, candidate.name),
+        ).fetchone()
+        self.db.execute(
+            """
+            INSERT INTO candidates(
+                registry,name,source,priority,repository_hint,type_hint,abandoned,status,
+                attempts,first_seen_at,last_seen_at,last_seen_token
+            ) VALUES(?,?,?,?,?,?,?,'PENDING',0,?,?,?)
+            ON CONFLICT(registry,name) DO UPDATE SET
+                source=excluded.source,
+                priority=MAX(candidates.priority, excluded.priority),
+                repository_hint=COALESCE(excluded.repository_hint,candidates.repository_hint),
+                type_hint=COALESCE(excluded.type_hint,candidates.type_hint),
+                abandoned=COALESCE(excluded.abandoned,candidates.abandoned),
+                status=CASE WHEN ? THEN 'PENDING' ELSE candidates.status END,
+                last_error=CASE WHEN ? THEN NULL ELSE candidates.last_error END,
+                last_seen_at=excluded.last_seen_at,
+                last_seen_token=COALESCE(excluded.last_seen_token,candidates.last_seen_token)
+            """,
+            (
+                candidate.registry,
+                candidate.name,
+                candidate.source,
+                int(candidate.priority),
+                candidate.repository_hint,
+                candidate.type_hint,
+                candidate.abandoned,
+                now,
+                now,
+                candidate.seen_token,
+                bool(candidate.requeue),
+                bool(candidate.requeue),
+            ),
+        )
+        return previous is None
+
+    def _set_cursor_no_commit(
+        self,
+        source: str,
+        *,
+        cursor: str | None = None,
+        etag: str | None = None,
+        last_modified: str | None = None,
+    ) -> None:
+        self.db.execute(
+            """
+            INSERT INTO cursors(source,cursor,etag,last_modified,updated_at)
+            VALUES(?,?,?,?,?)
+            ON CONFLICT(source) DO UPDATE SET
+                cursor=excluded.cursor,
+                etag=COALESCE(excluded.etag,cursors.etag),
+                last_modified=COALESCE(excluded.last_modified,cursors.last_modified),
+                updated_at=excluded.updated_at
+            """,
+            (source, cursor, etag, last_modified, _now()),
+        )
+
+    def _mark_deleted_no_commit(self, registry: str, name: str, *, source: str, now: str) -> bool:
+        previous = self.db.execute(
+            "SELECT status FROM candidates WHERE registry=? AND name=?",
+            (registry, name),
+        ).fetchone()
+        self.db.execute(
+            """
+            INSERT INTO candidates(
+                registry,name,source,priority,status,attempts,first_seen_at,last_seen_at,last_error
+            ) VALUES(?,?,?,0,'DELETED',0,?,?,NULL)
+            ON CONFLICT(registry,name) DO UPDATE SET
+                source=excluded.source,
+                status='DELETED',
+                last_seen_at=excluded.last_seen_at,
+                last_error=NULL
+            """,
+            (registry, name, source, now, now),
+        )
+        return previous is None
+
     def upsert_many(self, candidates: Iterable[HarvestCandidate]) -> tuple[int, int]:
         inserted = 0
         updated = 0
         now = _now()
-        for candidate in candidates:
-            previous = self.db.execute(
-                "SELECT status FROM candidates WHERE registry=? AND name=?",
-                (candidate.registry, candidate.name),
-            ).fetchone()
-            self.db.execute(
-                """
-                INSERT INTO candidates(
-                    registry,name,source,priority,repository_hint,type_hint,abandoned,status,
-                    attempts,first_seen_at,last_seen_at
-                ) VALUES(?,?,?,?,?,?,?,'PENDING',0,?,?)
-                ON CONFLICT(registry,name) DO UPDATE SET
-                    source=excluded.source,
-                    priority=MAX(candidates.priority, excluded.priority),
-                    repository_hint=COALESCE(excluded.repository_hint,candidates.repository_hint),
-                    type_hint=COALESCE(excluded.type_hint,candidates.type_hint),
-                    abandoned=COALESCE(excluded.abandoned,candidates.abandoned),
-                    status=CASE WHEN ? THEN 'PENDING' ELSE candidates.status END,
-                    last_error=CASE WHEN ? THEN NULL ELSE candidates.last_error END,
-                    last_seen_at=excluded.last_seen_at
-                """,
-                (
-                    candidate.registry,
-                    candidate.name,
-                    candidate.source,
-                    int(candidate.priority),
-                    candidate.repository_hint,
-                    candidate.type_hint,
-                    candidate.abandoned,
-                    now,
-                    now,
-                    bool(candidate.requeue),
-                    bool(candidate.requeue),
-                ),
-            )
-            if previous:
-                updated += 1
-            else:
-                inserted += 1
-        self.db.commit()
+        with self.db:
+            for candidate in candidates:
+                if self._upsert_one(candidate, now=now):
+                    inserted += 1
+                else:
+                    updated += 1
         return inserted, updated
+
+    def upsert_many_with_cursor(
+        self,
+        candidates: Iterable[HarvestCandidate],
+        *,
+        source: str,
+        cursor: str,
+    ) -> tuple[int, int]:
+        """Atomically persist one discovery page and its continuation cursor."""
+        inserted = 0
+        updated = 0
+        now = _now()
+        with self.db:
+            for candidate in candidates:
+                if self._upsert_one(candidate, now=now):
+                    inserted += 1
+                else:
+                    updated += 1
+            self._set_cursor_no_commit(source, cursor=cursor)
+        return inserted, updated
+
+    def apply_change_events(
+        self,
+        *,
+        registry: str,
+        source: str,
+        events: Iterable[dict[str, Any]],
+        cursor: str,
+        priority: int = 60,
+    ) -> dict[str, int]:
+        """Apply an ordered change-feed batch and advance its cursor in one transaction.
+
+        A crash before commit replays the whole response; a crash after commit resumes from
+        the new cursor. Package updates/deletes keep their upstream order inside the batch.
+        """
+        inserted = 0
+        updated = 0
+        deleted = 0
+        now = _now()
+        with self.db:
+            for event in events:
+                name = str(event.get("name") or "").strip()
+                if not name:
+                    continue
+                if bool(event.get("deleted")):
+                    self._mark_deleted_no_commit(registry, name, source=source, now=now)
+                    deleted += 1
+                    continue
+                candidate = HarvestCandidate(
+                    registry,
+                    name,
+                    source,
+                    priority,
+                    requeue=True,
+                )
+                if self._upsert_one(candidate, now=now):
+                    inserted += 1
+                else:
+                    updated += 1
+            self._set_cursor_no_commit(source, cursor=cursor)
+        return {"inserted": inserted, "updated": updated, "deleted": deleted}
 
     def mark_qualified(self, registry: str, name: str) -> None:
         self.db.execute(
@@ -136,21 +284,8 @@ class TechnologyHarvestQueue:
         self.db.commit()
 
     def mark_deleted(self, registry: str, name: str, *, source: str) -> None:
-        now = _now()
-        self.db.execute(
-            """
-            INSERT INTO candidates(
-                registry,name,source,priority,status,attempts,first_seen_at,last_seen_at,last_error
-            ) VALUES(?,?,?,0,'DELETED',0,?,?,NULL)
-            ON CONFLICT(registry,name) DO UPDATE SET
-                source=excluded.source,
-                status='DELETED',
-                last_seen_at=excluded.last_seen_at,
-                last_error=NULL
-            """,
-            (registry, name, source, now, now),
-        )
-        self.db.commit()
+        with self.db:
+            self._mark_deleted_no_commit(registry, name, source=source, now=_now())
 
     def pending(self, limit: int = 100) -> list[dict[str, Any]]:
         rows = self.db.execute(
@@ -176,19 +311,13 @@ class TechnologyHarvestQueue:
         etag: str | None = None,
         last_modified: str | None = None,
     ) -> None:
-        self.db.execute(
-            """
-            INSERT INTO cursors(source,cursor,etag,last_modified,updated_at)
-            VALUES(?,?,?,?,?)
-            ON CONFLICT(source) DO UPDATE SET
-                cursor=excluded.cursor,
-                etag=COALESCE(excluded.etag,cursors.etag),
-                last_modified=COALESCE(excluded.last_modified,cursors.last_modified),
-                updated_at=excluded.updated_at
-            """,
-            (source, cursor, etag, last_modified, _now()),
-        )
-        self.db.commit()
+        with self.db:
+            self._set_cursor_no_commit(
+                source,
+                cursor=cursor,
+                etag=etag,
+                last_modified=last_modified,
+            )
 
     def reset_cursor(self, source: str) -> None:
         self.db.execute("DELETE FROM cursors WHERE source=?", (source,))
@@ -227,6 +356,268 @@ class RegistryHarvester:
         )
         response.raise_for_status()
         return response
+
+    def _npm_replication_info(self) -> tuple[str, dict[str, Any]]:
+        last_error: Exception | None = None
+        for url in NPM_REPLICATION_ROOTS:
+            try:
+                response = self.session.get(
+                    url,
+                    headers=self._headers(extra={"npm-replication-opt-in": "true"}),
+                    timeout=120,
+                )
+                if int(getattr(response, "status_code", 0) or 0) == 404:
+                    continue
+                response.raise_for_status()
+                payload = response.json()
+                if isinstance(payload, dict) and payload.get("update_seq") is not None:
+                    return url, payload
+            except Exception as exc:
+                last_error = exc
+        if last_error:
+            raise RuntimeError(f"npm replication root unavailable: {last_error}") from last_error
+        raise RuntimeError("npm replication root returned no update_seq")
+
+    def harvest_npm_full(self, *, limit: int = 500, reset: bool = False) -> dict[str, Any]:
+        """Bootstrap the complete npm package-name universe via the official _all_docs API.
+
+        The registry head sequence is captured before enumeration. Once enumeration is
+        complete, incremental `_changes` starts from that captured sequence, so changes
+        that happened during the bootstrap are replayed instead of being lost.
+        """
+        if reset:
+            self.queue.reset_cursor(NPM_BOOTSTRAP_SOURCE)
+            self.queue.reset_cursor(NPM_CHANGES_SOURCE)
+
+        state_row = self.queue.cursor(NPM_BOOTSTRAP_SOURCE)
+        state = _cursor_json(state_row.get("cursor"))
+        if not state:
+            root_url, info = self._npm_replication_info()
+            snapshot_seq = str(info.get("update_seq"))
+            state = {
+                "complete": False,
+                "snapshot_seq": snapshot_seq,
+                "startkey": None,
+                "seen_token": f"npm-bootstrap:{snapshot_seq}:{_now()}",
+                "doc_count_at_start": int(info.get("doc_count") or 0),
+                "root_url": root_url,
+            }
+            self.queue.set_cursor(NPM_BOOTSTRAP_SOURCE, cursor=_dump_cursor(state))
+
+        snapshot_seq = str(state.get("snapshot_seq") or "").strip()
+        if not snapshot_seq:
+            raise RuntimeError("npm bootstrap cursor is missing snapshot_seq")
+
+        if bool(state.get("complete")):
+            changes = self.queue.cursor(NPM_CHANGES_SOURCE)
+            if not str(changes.get("cursor") or "").strip():
+                self.queue.set_cursor(NPM_CHANGES_SOURCE, cursor=snapshot_seq)
+            return {
+                "source": NPM_BOOTSTRAP_SOURCE,
+                "registry": "npmjs.org",
+                "full": True,
+                "complete": True,
+                "snapshot_seq": snapshot_seq,
+                "changes_cursor": str(self.queue.cursor(NPM_CHANGES_SOURCE).get("cursor") or snapshot_seq),
+                "discovered": 0,
+                "inserted": 0,
+                "updated": 0,
+                "pages": 0,
+            }
+
+        target = None if int(limit) <= 0 else max(1, int(limit))
+        discovered = 0
+        inserted = 0
+        updated = 0
+        processed_rows = 0
+        pages = 0
+        total_rows = None
+        startkey = state.get("startkey")
+        seen_token = str(state.get("seen_token") or f"npm-bootstrap:{snapshot_seq}")
+        complete = False
+
+        while target is None or processed_rows < target:
+            remaining = 1000 if target is None else min(1000, target - processed_rows)
+            request_limit = remaining + (1 if startkey else 0)
+            params: dict[str, Any] = {"limit": request_limit}
+            if startkey:
+                # CouchDB-style startkey is a JSON value, and npm's supported
+                # replication endpoint keeps this pagination contract.
+                params["startkey"] = json.dumps(str(startkey), ensure_ascii=False)
+            response = self._get(
+                NPM_ALL_DOCS_URL,
+                headers={"npm-replication-opt-in": "true"},
+                params=params,
+            )
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("unexpected npm _all_docs payload")
+            raw_rows = payload.get("rows") or []
+            if not isinstance(raw_rows, list):
+                raise ValueError("npm _all_docs rows is not a list")
+            if total_rows is None and payload.get("total_rows") is not None:
+                total_rows = int(payload.get("total_rows") or 0)
+
+            rows = list(raw_rows)
+            if startkey and rows and str((rows[0] or {}).get("id") or (rows[0] or {}).get("key") or "") == str(startkey):
+                rows = rows[1:]
+            if len(rows) > remaining:
+                rows = rows[:remaining]
+
+            page_candidates: list[HarvestCandidate] = []
+            page_last_key = str(startkey or "") or None
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                row_id = str(row.get("id") or row.get("key") or "").strip()
+                if row_id:
+                    page_last_key = row_id
+                name = _npm_package_name(row_id)
+                if not name:
+                    continue
+                page_candidates.append(
+                    HarvestCandidate(
+                        "npmjs.org",
+                        name,
+                        NPM_BOOTSTRAP_SOURCE,
+                        15,
+                        seen_token=seen_token,
+                    )
+                )
+
+            exhausted = len(raw_rows) < request_limit or not rows
+            next_state = {
+                **state,
+                "complete": bool(exhausted),
+                "startkey": page_last_key,
+                "last_page_rows": len(rows),
+                "last_total_rows": total_rows,
+            }
+            page_inserted, page_updated = self.queue.upsert_many_with_cursor(
+                page_candidates,
+                source=NPM_BOOTSTRAP_SOURCE,
+                cursor=_dump_cursor(next_state),
+            )
+            discovered += len(page_candidates)
+            inserted += page_inserted
+            updated += page_updated
+            processed_rows += len(rows)
+            pages += 1
+            state = next_state
+            startkey = page_last_key
+
+            if exhausted:
+                complete = True
+                break
+            if not rows:
+                raise RuntimeError("npm _all_docs pagination stalled without advancing startkey")
+
+        if complete:
+            # Deliberately committed after the final _all_docs page. If the process dies
+            # between these two writes, the next run reconstructs this cursor from the
+            # completed bootstrap state instead of starting at an unsafe head position.
+            if not str(self.queue.cursor(NPM_CHANGES_SOURCE).get("cursor") or "").strip():
+                self.queue.set_cursor(NPM_CHANGES_SOURCE, cursor=snapshot_seq)
+
+        return {
+            "source": NPM_BOOTSTRAP_SOURCE,
+            "registry": "npmjs.org",
+            "full": True,
+            "complete": complete,
+            "snapshot_seq": snapshot_seq,
+            "startkey": startkey,
+            "doc_count_at_start": int(state.get("doc_count_at_start") or 0),
+            "total_rows_last_response": total_rows,
+            "processed_rows": processed_rows,
+            "pages": pages,
+            "discovered": discovered,
+            "inserted": inserted,
+            "updated": updated,
+            "changes_cursor": str(self.queue.cursor(NPM_CHANGES_SOURCE).get("cursor") or "") or None,
+        }
+
+    def harvest_npm_changes(self, *, limit: int = 500, reset: bool = False) -> dict[str, Any]:
+        """Follow the official npm change feed from the durable bootstrap sequence."""
+        if reset:
+            self.queue.reset_cursor(NPM_CHANGES_SOURCE)
+
+        change_state = self.queue.cursor(NPM_CHANGES_SOURCE)
+        since = str(change_state.get("cursor") or "").strip()
+        bootstrap = _cursor_json(self.queue.cursor(NPM_BOOTSTRAP_SOURCE).get("cursor"))
+        if not since and bootstrap.get("complete") and bootstrap.get("snapshot_seq") is not None:
+            since = str(bootstrap["snapshot_seq"])
+            self.queue.set_cursor(NPM_CHANGES_SOURCE, cursor=since)
+
+        if not since:
+            root_url, info = self._npm_replication_info()
+            return {
+                "source": NPM_CHANGES_SOURCE,
+                "registry": "npmjs.org",
+                "full": False,
+                "bootstrap_required": True,
+                "complete_bootstrap": bool(bootstrap.get("complete")),
+                "current_update_seq": str(info.get("update_seq")),
+                "current_doc_count": int(info.get("doc_count") or 0),
+                "root_url": root_url,
+                "discovered": 0,
+                "inserted": 0,
+                "updated": 0,
+                "deleted": 0,
+            }
+
+        target = max(1, min(int(limit) if int(limit) > 0 else 5000, 5000))
+        response = self._get(
+            NPM_CHANGES_URL,
+            headers={"npm-replication-opt-in": "true"},
+            params={"since": since, "limit": target},
+        )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("unexpected npm _changes payload")
+        results = payload.get("results") or []
+        if not isinstance(results, list):
+            raise ValueError("npm _changes results is not a list")
+        last_seq = payload.get("last_seq")
+        if last_seq is None:
+            raise ValueError("npm _changes response is missing last_seq")
+
+        events: list[dict[str, Any]] = []
+        non_package_rows = 0
+        for row in results:
+            if not isinstance(row, dict):
+                continue
+            name = _npm_package_name(row.get("id"))
+            if not name:
+                non_package_rows += 1
+                continue
+            events.append({"name": name, "deleted": bool(row.get("deleted"))})
+
+        counts = self.queue.apply_change_events(
+            registry="npmjs.org",
+            source=NPM_CHANGES_SOURCE,
+            events=events,
+            cursor=str(last_seq),
+            priority=60,
+        )
+        deleted = int(counts["deleted"])
+        discovered = sum(1 for event in events if not event.get("deleted"))
+        return {
+            "source": NPM_CHANGES_SOURCE,
+            "registry": "npmjs.org",
+            "full": False,
+            "bootstrap_required": False,
+            "previous_cursor": since,
+            "cursor": str(last_seq),
+            "results": len(results),
+            "events": len(events),
+            "unique_packages": len({event["name"] for event in events}),
+            "non_package_rows": non_package_rows,
+            "discovered": discovered,
+            "inserted": int(counts["inserted"]),
+            "updated": int(counts["updated"]),
+            "deleted": deleted,
+            "pending": payload.get("pending"),
+        }
 
     def harvest_packagist_popular(self, *, limit: int = 500) -> dict[str, Any]:
         candidates: list[HarvestCandidate] = []
@@ -294,9 +685,6 @@ class RegistryHarvester:
             payload = response.json()
         except Exception:
             payload = {}
-        # Packagist intentionally returns HTTP 400 on the initialization request,
-        # with a usable timestamp in the JSON body. The same shape is useful to
-        # recover from an invalid/expired cursor without treating it as fatal.
         if int(getattr(response, "status_code", 200) or 200) == 400 and payload.get("timestamp") is not None:
             return response, payload
         response.raise_for_status()
@@ -346,9 +734,6 @@ class RegistryHarvester:
         candidates: list[HarvestCandidate] = []
         deleted = 0
         resync = False
-        # Do not truncate a change-feed response before advancing its cursor. The
-        # response bytes are already downloaded; processing all actions is required
-        # to avoid silently skipping updates.
         for action in actions:
             if not isinstance(action, dict):
                 continue
@@ -483,8 +868,6 @@ class RegistryHarvester:
             pages += 1
             next_value = payload.get("nextUrl")
             next_url = str(next_value).strip() if next_value else ""
-            # Persist after every page for crash-safe continuation. A repeated page
-            # after a crash is harmless because the queue is idempotent.
             self.queue.set_cursor(source, cursor=next_url or "__COMPLETE__")
 
         return {
@@ -539,6 +922,8 @@ class RegistryHarvester:
 
     def harvest(self, registry: str, *, limit: int = 500, full: bool = False, reset: bool = False) -> dict[str, Any]:
         key = registry.strip().casefold()
+        if key in {"npm", "npmjs", "npmjs.org"}:
+            return self.harvest_npm_full(limit=limit, reset=reset) if full else self.harvest_npm_changes(limit=limit, reset=reset)
         if key in {"packagist", "composer"}:
             return self.harvest_packagist_all(limit=limit) if full else self.harvest_packagist_popular(limit=limit)
         if key in {"packagist-changes", "composer-changes"}:
