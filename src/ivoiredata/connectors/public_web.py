@@ -24,7 +24,7 @@ _SKIP_EXTENSIONS = {
 _METADATA_DENY_TOKENS = ("download", "microdata", "datafile", "data-file", "get-microdata", "get_microdata")
 _MIN_PDF_TEXT_CHARS = 80
 _ENCODED_TRAILING_WS = re.compile(r"(?:(?:%20)|(?:%09)|(?:%0a)|(?:%0d))+$", re.IGNORECASE)
-_UPLOAD_DIRECTORY = re.compile(r"/(?:uploads?|wp-content/uploads)(?:/[^/?#]+)*/$", re.IGNORECASE)
+_UPLOAD_PATH = re.compile(r"/(?:uploads?|wp-content/uploads)(?:/|$)", re.IGNORECASE)
 
 
 class _HTMLTextAndLinks(HTMLParser):
@@ -83,7 +83,14 @@ def _normalize_url(value: str) -> str:
 
 
 def _is_upload_directory(url: str) -> bool:
-    return bool(_UPLOAD_DIRECTORY.search(urlparse(url).path.lower()))
+    path = urlparse(url).path
+    if not _UPLOAD_PATH.search(path):
+        return False
+    if path.endswith("/"):
+        return True
+    # The SGG publishes crawl-container links both as `/uploads/publications/` and
+    # `/uploads/publications`. Keep actual files such as `/uploads/.../document.pdf`.
+    return not bool(Path(path).suffix)
 
 
 def _retire_invalid_legacy_artifacts(upstream: UpstreamState, source_id: str) -> int:

@@ -110,22 +110,38 @@ def stream_response_snapshot(
     content_type: str | None = None,
     name: str | None = None,
     chunk_size: int = 1024 * 1024,
+    expected_sha256: str | None = None,
+    max_bytes: int | None = None,
 ) -> dict[str, object]:
-    """Write ``requests`` response bytes incrementally without materializing them in RAM."""
+    """Write response bytes incrementally and promote only validated complete content.
+
+    ``expected_sha256`` is useful for physical repair: historical bytes are restored only
+    when the upstream URL still serves the exact object previously recorded. ``max_bytes``
+    prevents a stale/misconfigured URL from filling local storage during a repair.
+    """
     temp_path = new_temp_path(directory, prefix=name or source_id)
     digest = hashlib.sha256()
     size = 0
+    expected = str(expected_sha256 or "").strip().lower() or None
+    byte_limit = int(max_bytes) if max_bytes is not None else None
     try:
         with temp_path.open("wb") as handle:
             iterator: Iterable[bytes] = response.iter_content(chunk_size=max(64 * 1024, int(chunk_size)))
             for chunk in iterator:
                 if not chunk:
                     continue
+                size += len(chunk)
+                if byte_limit is not None and size > byte_limit:
+                    raise ValueError(f"payload too large: {size} > {byte_limit}")
                 handle.write(chunk)
                 digest.update(chunk)
-                size += len(chunk)
             handle.flush()
             os.fsync(handle.fileno())
+        actual_sha = digest.hexdigest()
+        if expected is not None and actual_sha.lower() != expected:
+            raise ValueError(
+                f"sha256 mismatch during repair expected={expected} actual={actual_sha}"
+            )
         return finalize_temp_snapshot(
             directory,
             temp_path=temp_path,
@@ -133,7 +149,7 @@ def stream_response_snapshot(
             url=url,
             content_type=content_type,
             name=name,
-            sha256=digest.hexdigest(),
+            sha256=actual_sha,
             size_bytes=size,
         )
     except BaseException:
