@@ -82,6 +82,30 @@ def _normalize_url(value: str) -> str:
     return urlunsplit((split.scheme, split.netloc, path, split.query, ""))
 
 
+def _is_upload_directory(url: str) -> bool:
+    return bool(_UPLOAD_DIRECTORY.search(urlparse(url).path.lower()))
+
+
+def _retire_invalid_legacy_artifacts(upstream: UpstreamState, source_id: str) -> int:
+    """Tombstone crawl artifacts that were created from malformed/container URLs.
+
+    Older runs could retain an URL ending in encoded whitespace (for example ``%20``)
+    or an upload-directory URL such as ``/uploads/publications/``.  Those are not valid
+    document identities and otherwise remain forever in the physical repair queue.
+    """
+    retired = 0
+    for row in upstream.source_rows(source_id):
+        artifact_id = str(row.get("artifact_id") or "")
+        if not artifact_id.startswith("url:"):
+            continue
+        old_url = artifact_id[4:]
+        normalized = _normalize_url(old_url)
+        if normalized != old_url or _is_upload_directory(old_url):
+            upstream.mark_removed(source_id, artifact_id)
+            retired += 1
+    return retired
+
+
 def _same_host_links(base_url: str, hrefs: list[str], *, metadata_only: bool = False) -> list[str]:
     base_url = _normalize_url(base_url)
     host = (urlparse(base_url).hostname or "").lower()
@@ -97,9 +121,7 @@ def _same_host_links(base_url: str, hrefs: list[str], *, metadata_only: bool = F
         if (parsed.hostname or "").lower() != host:
             continue
         path = parsed.path.lower()
-        # Asset directories such as /uploads/publications/ are crawl containers, not
-        # retrievable documents. Tracking them as artifacts creates permanent 403 noise.
-        if _UPLOAD_DIRECTORY.search(path):
+        if _is_upload_directory(candidate):
             continue
         if any(path.endswith(ext) for ext in _SKIP_EXTENSIONS):
             continue
@@ -205,6 +227,8 @@ def public_document_resource(
         state = dlt.current.resource_state().setdefault("content_hashes", {})
         session = requests.Session()
         upstream = UpstreamState(upstream_state_path) if upstream_state_path else None
+        if upstream:
+            _retire_invalid_legacy_artifacts(upstream, source_id)
         if not verify_ssl:
             session.verify = False
             try:
@@ -220,7 +244,7 @@ def public_document_resource(
         fetched = 0
         while queue and fetched < max_pages:
             current = _normalize_url(queue.popleft())
-            if current in seen:
+            if current in seen or _is_upload_directory(current):
                 continue
             seen.add(current)
             if metadata_only:
