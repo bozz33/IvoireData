@@ -16,3 +16,5 @@ jobs:
       - run: ivoiredata --help
       - run: ivoiredata programming-docs languages
       - run: ivoiredata programming-docs audit
+      - run: ivoiredata-tech --help
+      - run: ivoiredata-tech harvest-audit
