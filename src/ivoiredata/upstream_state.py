@@ -157,6 +157,29 @@ class UpstreamState:
             last_result="ERROR",
         )
 
+    def mark_ghost(self, source_id: str, artifact_id: str, *, url: str,
+                   signature: str | None, evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Persist a catalogue entry that cannot be dereferenced by its authority API.
+
+        A ghost is not a transient fetch failure: it is still advertised by the live
+        catalogue while the authority's dataset detail and data endpoints return 404.
+        The catalogue signature is retained so unchanged ghosts can be skipped on later
+        runs and automatically re-probed if their catalogue metadata changes.
+        """
+        return self._update(
+            source_id, artifact_id,
+            url=url,
+            signature=signature,
+            downloaded=False,
+            removed=False,
+            error=None,
+            http_status=404,
+            method="UPSTREAM_GHOST_CONFIRMATION",
+            last_checked=_now(),
+            last_result="UPSTREAM_GHOST",
+            ghost_evidence=dict(evidence or {}),
+        )
+
     def mark_removed(self, source_id: str, artifact_id: str) -> dict[str, Any]:
         return self._update(
             source_id, artifact_id,
