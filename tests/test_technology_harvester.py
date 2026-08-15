@@ -77,6 +77,18 @@ def test_real_upstream_change_requeues_qualified_candidate(tmp_path: Path):
         queue.close()
 
 
+def test_deleted_upstream_candidate_is_not_qualifiable(tmp_path: Path):
+    queue = TechnologyHarvestQueue(tmp_path / "harvest.sqlite3")
+    try:
+        queue.upsert_many([HarvestCandidate("packagist.org", "old/package", "seed", 10)])
+        queue.mark_qualified("packagist.org", "old/package")
+        queue.mark_deleted("packagist.org", "old/package", source="packagist-changes")
+        assert queue.pending(10) == []
+        assert queue.audit()["by_status"] == {"DELETED": 1}
+    finally:
+        queue.close()
+
+
 def test_packagist_popular_harvests_bounded_candidates(tmp_path: Path):
     queue = TechnologyHarvestQueue(tmp_path / "harvest.sqlite3")
     session = FakeSession([
@@ -97,31 +109,124 @@ def test_packagist_popular_harvests_bounded_candidates(tmp_path: Path):
         queue.close()
 
 
-def test_pubdev_harvester_persists_next_url_cursor(tmp_path: Path):
+def test_packagist_changes_initializes_from_documented_400_timestamp(tmp_path: Path):
     queue = TechnologyHarvestQueue(tmp_path / "harvest.sqlite3")
     session = FakeSession([
-        FakeResponse({"packages": ["http", "provider"], "nextUrl": "https://pub.dev/api/package-names?page=2"})
+        FakeResponse(
+            {"error": "Invalid or missing since", "timestamp": 17867808670011},
+            status_code=400,
+        )
     ])
     try:
-        result = RegistryHarvester(queue=queue, user_agent="test", session=session).harvest("pub", limit=2)
-        assert result["discovered"] == 2
-        assert queue.cursor("pubdev-package-names")["cursor"].endswith("page=2")
+        result = RegistryHarvester(queue=queue, user_agent="test", session=session).harvest("packagist-changes")
+        assert result["initialized"] is True
+        assert result["cursor"] == "17867808670011"
+        assert queue.cursor("packagist-changes")["cursor"] == "17867808670011"
+        assert session.calls[0][1].get("params") is None
     finally:
         queue.close()
 
 
-def test_pubdev_complete_cursor_prevents_restart_from_page_one(tmp_path: Path):
+def test_packagist_changes_processes_every_action_before_advancing_cursor(tmp_path: Path):
     queue = TechnologyHarvestQueue(tmp_path / "harvest.sqlite3")
-    session = FakeSession([FakeResponse({"packages": ["http"], "nextUrl": None})])
+    queue.set_cursor("packagist-changes", cursor="100")
+    queue.upsert_many([HarvestCandidate("packagist.org", "laravel/framework", "seed", 90)])
+    queue.mark_qualified("packagist.org", "laravel/framework")
+    session = FakeSession([
+        FakeResponse({
+            "timestamp": 200,
+            "actions": [
+                {"type": "update", "package": "laravel/framework"},
+                {"type": "update", "package": "symfony/console~dev"},
+                {"type": "delete", "package": "old/package"},
+            ],
+        })
+    ])
+    try:
+        # limit=1 must not truncate a cursor-bearing change-feed response.
+        result = RegistryHarvester(queue=queue, user_agent="test", session=session).harvest(
+            "packagist-changes", limit=1
+        )
+        assert result["actions"] == 3
+        assert result["discovered"] == 2
+        assert result["deleted"] == 1
+        assert result["cursor"] == "200"
+        assert queue.cursor("packagist-changes")["cursor"] == "200"
+        pending_names = {row["name"] for row in queue.pending(10)}
+        assert pending_names == {"laravel/framework", "symfony/console"}
+        assert queue.audit()["by_status"]["DELETED"] == 1
+    finally:
+        queue.close()
+
+
+def test_packagist_invalid_existing_cursor_reinitializes_and_requests_resync(tmp_path: Path):
+    queue = TechnologyHarvestQueue(tmp_path / "harvest.sqlite3")
+    queue.set_cursor("packagist-changes", cursor="expired")
+    session = FakeSession([
+        FakeResponse({"error": "invalid since", "timestamp": 999}, status_code=400)
+    ])
+    try:
+        result = RegistryHarvester(queue=queue, user_agent="test", session=session).harvest("packagist-changes")
+        assert result["cursor_reinitialized"] is True
+        assert result["resync_required"] is True
+        assert queue.cursor("packagist-changes")["cursor"] == "999"
+    finally:
+        queue.close()
+
+
+def test_pubdev_bounded_mode_uses_ranked_completion_api_and_never_claims_complete(tmp_path: Path):
+    queue = TechnologyHarvestQueue(tmp_path / "harvest.sqlite3")
+    session = FakeSession([
+        FakeResponse(
+            {"packages": ["http", "provider", "riverpod"]},
+            headers={"ETag": '"pub-top"'},
+        )
+    ])
+    try:
+        result = RegistryHarvester(queue=queue, user_agent="test", session=session).harvest("pub", limit=2)
+        assert result["ranked"] is True
+        assert result["full"] is False
+        assert result["complete"] is False
+        assert result["discovered"] == 2
+        assert "package-name-completion-data" in session.calls[0][0]
+        assert queue.cursor("pubdev-popular")["cursor"] == "RANKED"
+        assert queue.cursor("pubdev-package-names") == {}
+    finally:
+        queue.close()
+
+
+def test_pubdev_full_single_page_ingests_entire_downloaded_page_even_with_small_limit(tmp_path: Path):
+    queue = TechnologyHarvestQueue(tmp_path / "harvest.sqlite3")
+    session = FakeSession([
+        FakeResponse({"packages": ["http", "provider", "riverpod"], "nextUrl": None})
+    ])
     try:
         harvester = RegistryHarvester(queue=queue, user_agent="test", session=session)
-        first = harvester.harvest("pub", limit=100)
+        first = harvester.harvest("pub", limit=1, full=True)
+        assert first["full"] is True
         assert first["complete"] is True
+        assert first["discovered"] == 3
+        assert queue.audit()["by_registry"] == {"pub.dev": 3}
         assert queue.cursor("pubdev-package-names")["cursor"] == "__COMPLETE__"
-        second = harvester.harvest("pub", limit=100)
+        second = harvester.harvest("pub", full=True)
         assert second["complete"] is True
         assert second["discovered"] == 0
         assert len(session.calls) == 1
+    finally:
+        queue.close()
+
+
+def test_pubdev_full_persists_next_page_for_crash_safe_continuation(tmp_path: Path):
+    queue = TechnologyHarvestQueue(tmp_path / "harvest.sqlite3")
+    session = FakeSession([
+        FakeResponse({"packages": ["a", "b"], "nextUrl": "https://pub.dev/api/package-names?page=2"}),
+        FakeResponse({"packages": ["c"], "nextUrl": None}),
+    ])
+    try:
+        result = RegistryHarvester(queue=queue, user_agent="test", session=session).harvest("pub", full=True)
+        assert result["pages"] == 2
+        assert result["discovered"] == 3
+        assert queue.cursor("pubdev-package-names")["cursor"] == "__COMPLETE__"
     finally:
         queue.close()
 
