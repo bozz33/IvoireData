@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import io
+import re
 from collections import deque
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urldefrag, urljoin, urlparse
+from urllib.parse import urldefrag, urljoin, urlparse, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 
 from ..cleaning import clean_text
@@ -22,6 +23,8 @@ _SKIP_EXTENSIONS = {
 }
 _METADATA_DENY_TOKENS = ("download", "microdata", "datafile", "data-file", "get-microdata", "get_microdata")
 _MIN_PDF_TEXT_CHARS = 80
+_ENCODED_TRAILING_WS = re.compile(r"(?:(?:%20)|(?:%09)|(?:%0a)|(?:%0d))+$", re.IGNORECASE)
+_UPLOAD_DIRECTORY = re.compile(r"/(?:uploads?|wp-content/uploads)(?:/[^/?#]+)*/$", re.IGNORECASE)
 
 
 class _HTMLTextAndLinks(HTMLParser):
@@ -72,17 +75,32 @@ def chunk_text(text: str, size: int = 3500, overlap: int = 250):
         start = max(start + 1, end - overlap)
 
 
+def _normalize_url(value: str) -> str:
+    raw = str(value or "").strip()
+    split = urlsplit(raw)
+    path = _ENCODED_TRAILING_WS.sub("", split.path.rstrip())
+    return urlunsplit((split.scheme, split.netloc, path, split.query, ""))
+
+
 def _same_host_links(base_url: str, hrefs: list[str], *, metadata_only: bool = False) -> list[str]:
+    base_url = _normalize_url(base_url)
     host = (urlparse(base_url).hostname or "").lower()
     out: list[str] = []
     for href in hrefs:
-        candidate = urldefrag(urljoin(base_url, href))[0]
+        raw_href = str(href or "").strip()
+        if not raw_href:
+            continue
+        candidate = _normalize_url(urldefrag(urljoin(base_url, raw_href))[0])
         parsed = urlparse(candidate)
         if parsed.scheme not in {"http", "https"}:
             continue
         if (parsed.hostname or "").lower() != host:
             continue
         path = parsed.path.lower()
+        # Asset directories such as /uploads/publications/ are crawl containers, not
+        # retrievable documents. Tracking them as artifacts creates permanent 403 noise.
+        if _UPLOAD_DIRECTORY.search(path):
+            continue
         if any(path.endswith(ext) for ext in _SKIP_EXTENSIONS):
             continue
         if metadata_only:
@@ -154,7 +172,7 @@ def public_document_resource(
     *,
     source_id: str,
     url: str,
-    user_agent: str = "IvoireData/0.8.3",
+    user_agent: str = "IvoireData/0.8.4",
     force: bool = False,
     crawl: bool = False,
     max_pages: int = 1,
@@ -180,6 +198,7 @@ def public_document_resource(
     max_pages = max(1, min(int(max_pages), 500))
     max_bytes = max(100_000, int(max_bytes))
     base = dict(metadata_base or {})
+    url = _normalize_url(url)
 
     @dlt.resource(name="public_documents", write_disposition="merge", primary_key="chunk_id")
     def resource():
@@ -200,7 +219,7 @@ def public_document_resource(
         robots_cache: dict[str, RobotFileParser | None] = {}
         fetched = 0
         while queue and fetched < max_pages:
-            current = queue.popleft()
+            current = _normalize_url(queue.popleft())
             if current in seen:
                 continue
             seen.add(current)
@@ -274,7 +293,7 @@ def public_document_resource(
             if not replayed_from_cache:
                 assert response is not None
                 raw = response.content
-                response_url = response.url
+                response_url = _normalize_url(response.url)
                 response_headers = dict(response.headers)
                 ctype = response.headers.get("content-type", "").lower()
 
