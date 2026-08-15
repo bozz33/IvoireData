@@ -51,12 +51,7 @@ def finalize_temp_snapshot(
     sha256: str | None = None,
     size_bytes: int | None = None,
 ) -> dict[str, object]:
-    """Atomically promote a completed temporary file to a hash-addressed snapshot name.
-
-    The temporary file must live on the same filesystem as ``directory``.  The final
-    filename contains a digest prefix, so a retry that receives identical bytes reuses
-    the existing object instead of creating a duplicate.
-    """
+    """Atomically promote a completed temporary file to a digest-addressed snapshot."""
     directory.mkdir(parents=True, exist_ok=True)
     temp_path = Path(temp_path)
     digest = hashlib.sha256()
@@ -79,7 +74,7 @@ def finalize_temp_snapshot(
     ext = _extension(url, content_type, name)
     if not Path(base).suffix:
         base += ext
-    filename = f"{_safe_filename(Path(base).stem)}--{actual_sha[:16]}{Path(base).suffix or ext}"
+    filename = f"{_safe_filename(Path(base).stem)}--{actual_sha}{Path(base).suffix or ext}"
     final_path = directory / filename
     if final_path.exists():
         temp_path.unlink(missing_ok=True)
@@ -92,7 +87,7 @@ def finalize_temp_snapshot(
         "content_type": content_type,
         "sha256": actual_sha,
         "size_bytes": actual_size,
-        "retrieved_at": datetime.now().astimezone().replace(microsecond=0).isoformat(),
+        "retrieved_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "local_file": filename,
         "write_mode": "streaming",
     }
