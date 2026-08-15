@@ -9,6 +9,7 @@ from uuid import uuid4
 from .http_client import HttpBudgetExceeded, http_run_context
 from .settings import Settings
 from .technology_catalog import GlobalTechnologyCatalogEngine
+from .technology_crates import CratesIndexHarvester
 from .technology_harvester import RegistryHarvester, TechnologyHarvestQueue, qualify_pending
 from .technology_wikidata import discover_wikidata_resilient
 
@@ -39,22 +40,24 @@ def parser() -> argparse.ArgumentParser:
     refresh.add_argument("--limit", type=int, default=0, help="0 means all known package records")
 
     harvest = sub.add_parser("harvest", help="discover package names from official bulk/change feeds into the SQLite queue")
-    harvest.add_argument("registry", help="npm, packagist, packagist-changes, pypi, rubygems, pub")
+    harvest.add_argument("registry", help="npm, crates, packagist, packagist-changes, pypi, rubygems, pub")
     harvest.add_argument(
         "--limit",
         type=int,
         default=500,
         help=(
-            "bounded candidate/event target; for npm --full this is the maximum rows "
-            "processed in this invocation (0 means continue until the bootstrap is complete)"
+            "bounded candidate/event target; npm/crates --full bound the bootstrap names "
+            "processed in this invocation (0 means continue until complete). Cursor-bearing "
+            "incremental diffs are never truncated unsafely."
         ),
     )
     harvest.add_argument(
         "--full",
         action="store_true",
         help=(
-            "use the complete bulk source where supported; npm uses official _all_docs "
-            "bootstrap before enabling the incremental _changes follower"
+            "use the complete bulk source where supported; npm uses official _all_docs, "
+            "crates uses the official crates.io Git index snapshot before enabling its "
+            "incremental follower"
         ),
     )
     harvest.add_argument("--reset", action="store_true", help="clear the source cursor/completion state before harvesting")
@@ -148,13 +151,21 @@ def main(argv=None) -> int:
             )
         elif args.command == "harvest":
             queue = _queue(settings)
-            harvester = RegistryHarvester(queue=queue, user_agent=settings.user_agent)
+            key = str(args.registry or "").strip().casefold()
+            if key in {"crates", "crate", "cargo", "crates.io"}:
+                crates = CratesIndexHarvester(queue=queue)
+                operation = lambda: crates.harvest(
+                    limit=args.limit, full=args.full, reset=args.reset
+                )
+            else:
+                harvester = RegistryHarvester(queue=queue, user_agent=settings.user_agent)
+                operation = lambda: harvester.harvest(
+                    args.registry, limit=args.limit, full=args.full, reset=args.reset
+                )
             payload, exit_code = _network_run(
                 settings,
                 label=f"harvest-{args.registry}",
-                operation=lambda: harvester.harvest(
-                    args.registry, limit=args.limit, full=args.full, reset=args.reset
-                ),
+                operation=operation,
             )
         elif args.command == "qualify":
             queue = _queue(settings)

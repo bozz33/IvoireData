@@ -34,7 +34,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     IVOIREDATA_DATA_DIR=/app/data_lake \
     IVOIREDATA_STATE_DIR=/app/.ivoiredata/state
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl git \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid ${PGID} ivoire \
     && useradd --system --uid ${PUID} --gid ivoire --create-home --home-dir /home/ivoire --shell /bin/bash ivoire
