@@ -84,7 +84,7 @@ def test_artifact_ledger_never_claims_fetched_without_local_file(tmp_path):
         ledger.close()
 
 
-def test_artifact_run_ledger_records_observed_artifacts(tmp_path):
+def test_artifact_run_ledger_records_observed_artifacts_and_http_metrics(tmp_path):
     raw = tmp_path / "artifact.bin"
     raw.write_bytes(b"hello")
     ledger = ArtifactLedger(tmp_path / "ledger.sqlite3")
@@ -103,18 +103,41 @@ def test_artifact_run_ledger_records_observed_artifacts(tmp_path):
             },
             run_id=run_id,
         )
-        ledger.finish_run(run_id, status="SUCCESS")
+        ledger.finish_run(
+            run_id,
+            status="SUCCESS",
+            http_metrics={
+                "logical_requests": 3,
+                "network_attempts": 4,
+                "retries": 1,
+                "responses_304": 1,
+                "bytes_downloaded": 1234,
+                "failures": 0,
+                "rate_limit_wait_seconds": 0.25,
+                "elapsed_seconds": 1.5,
+                "budget_exceeded": False,
+                "status_counts": {"200": 2, "304": 1},
+            },
+        )
         audit = ledger.audit(source_id="civ_test")
-        assert audit["schema_version"] == 2
-        assert audit["recent_runs"][0]["run_id"] == run_id
-        assert audit["recent_runs"][0]["status"] == "SUCCESS"
-        assert audit["recent_runs"][0]["artifacts_observed"] == 1
-        assert audit["recent_runs"][0]["bytes_observed"] == raw.stat().st_size
+        assert audit["schema_version"] == 3
+        run = audit["recent_runs"][0]
+        assert run["run_id"] == run_id
+        assert run["status"] == "SUCCESS"
+        assert run["artifacts_observed"] == 1
+        assert run["bytes_observed"] == raw.stat().st_size
+        assert run["http_requests"] == 3
+        assert run["http_attempts"] == 4
+        assert run["http_retries"] == 1
+        assert run["http_304"] == 1
+        assert run["http_bytes"] == 1234
+        assert run["budget_exceeded"] == 0
+        assert '"304": 1' in run["http_metrics_json"]
     finally:
         ledger.close()
 
 
-def test_v1_migration_recovers_verified_at_after_status_was_overwritten(tmp_path):
+def test_v1_migration_recovers_verification_and_adds_run_metrics(tmp_path):
     database = tmp_path / "legacy.sqlite3"
     raw = tmp_path / "legacy.csv"
     raw.write_bytes(b"x\n1\n")
@@ -164,10 +187,14 @@ def test_v1_migration_recovers_verified_at_after_status_was_overwritten(tmp_path
     ledger = ArtifactLedger(database)
     try:
         row = ledger.get("civ_datagouv_catalog", "dataset:legacy")
-        assert ledger.schema_version == 2
+        assert ledger.schema_version == 3
         assert row["status"] == "UNCHANGED"
         assert row["verification_status"] == "VERIFIED"
         assert row["verified_sha256"] == digest
+        run_columns = {
+            item["name"] for item in ledger.db.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        assert {"http_requests", "http_bytes", "budget_exceeded", "http_metrics_json"} <= run_columns
         assert ledger.audit(source_id="civ_datagouv_catalog")["verified_artifacts"] == 1
     finally:
         ledger.close()
