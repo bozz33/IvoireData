@@ -72,10 +72,12 @@ class GlobalTechnologyCatalogEngine(GlobalTechnologyDiscoveryEngine):
         docs = native.get("documentation_url") or _extract_docs(eco)
 
         deps_repo = None
+        deps_used = False
         deps_system = _DEPS_SYSTEMS.get(registry)
         if deps_system:
             deps_url = f"{DEPS_DEV_API}/systems/{deps_system}/packages/{quote(canonical_name, safe='')}"
             deps_package = self._safe_json(deps_url)
+            deps_used = bool(deps_package)
             versions = deps_package.get("versions") or []
             default = next((item for item in versions if isinstance(item, dict) and item.get("isDefault")), None)
             if default:
@@ -86,6 +88,7 @@ class GlobalTechnologyCatalogEngine(GlobalTechnologyDiscoveryEngine):
                 if default_version:
                     version_url = f"{DEPS_DEV_API}/systems/{deps_system}/packages/{quote(canonical_name, safe='')}/versions/{quote(default_version, safe='')}"
                     deps_payload = self._safe_json(version_url)
+                    deps_used = deps_used or bool(deps_payload)
                     links = _deps_links(deps_payload)
                     deps_repo = normalize_repository_url(links.get("SOURCE_REPO") or links.get("SOURCE") or links.get("REPOSITORY"))
                     docs = docs or links.get("DOCUMENTATION")
@@ -101,8 +104,19 @@ class GlobalTechnologyCatalogEngine(GlobalTechnologyDiscoveryEngine):
         if native:
             score = min(100, score + 10)
             evidence = _merge_unique("NATIVE_REGISTRY_METADATA", evidence)
-        if registry_repo and deps_repo and normalize_repository_url(registry_repo) == normalize_repository_url(deps_repo):
+
+        repo_match = bool(
+            registry_repo
+            and deps_repo
+            and normalize_repository_url(registry_repo) == normalize_repository_url(deps_repo)
+        )
+        repo_conflict = bool(registry_repo and deps_repo and not repo_match)
+        if repo_match:
             evidence = _merge_unique(evidence, "CROSS_SOURCE_REPOSITORY_MATCH")
+        if repo_conflict:
+            # Conflicting authority evidence must never silently become VERIFIED_OFFICIAL.
+            score = min(score, 79)
+            evidence = _merge_unique(evidence, "REPOSITORY_CONFLICT")
 
         metrics = {
             "downloads_total": _int(native.get("downloads_total") or eco.get("downloads")),
@@ -123,6 +137,7 @@ class GlobalTechnologyCatalogEngine(GlobalTechnologyDiscoveryEngine):
             "latest_stable_version": latest,
             "latest_purl": build_purl(registry, canonical_name, latest) if latest else None,
             "canonical_repository": registry_repo or deps_repo,
+            "alternate_repository": deps_repo if repo_conflict else None,
             "documentation_url": docs,
             "official_website": homepage,
             "officiality_score": score,
@@ -131,7 +146,11 @@ class GlobalTechnologyCatalogEngine(GlobalTechnologyDiscoveryEngine):
             "authority_source": native.get("authority_source") or "ecosyste.ms",
             "native_registry_url": native.get("native_registry_url"),
             "ecosystems_url": eco_url if eco else None,
-            "discovery_sources": _merge_unique(native.get("authority_source"), "ecosyste.ms" if eco else None, "deps.dev" if deps_system else None),
+            "discovery_sources": _merge_unique(
+                native.get("authority_source"),
+                "ecosyste.ms" if eco else None,
+                "deps.dev" if deps_used else None,
+            ),
             **metrics,
         }
         importance, tier = importance_score(record)
