@@ -67,9 +67,9 @@ def test_nuget_follower_deleted_packages_is_delta_not_registry_total(tmp_path):
     target = "2026-08-15T11:00:00Z"
 
     base_items = [
-        _leaf("Alive", "1.0.0", base),
-        _leaf("Already.Dead", "1.0.0", base),
-        _leaf("Already.Dead", "1.0.0", base, "PackageDelete"),
+        _leaf("Alive", "1.0.0", "2026-08-15T09:57:00Z"),
+        _leaf("Already.Dead", "1.0.0", "2026-08-15T09:58:00Z"),
+        _leaf("Already.Dead", "1.0.0", "2026-08-15T09:59:00Z", "PackageDelete"),
     ]
     target_items = base_items + [_leaf("New.Package", "1.0.0", target)]
     session = FakeSession({
