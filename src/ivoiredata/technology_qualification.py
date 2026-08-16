@@ -24,10 +24,9 @@ DEFAULT_MAX_ATTEMPTS = 5
 DEFAULT_RETRY_BASE_SECONDS = 15 * 60
 DEFAULT_RETRY_MAX_SECONDS = 24 * 60 * 60
 
-# Native adapters that can currently qualify a package without relying on a
-# third-party discovery index. The order is intentionally cross-ecosystem so a
-# recently completed multi-million-package bootstrap cannot monopolize the
-# qualification worker.
+# Round-robin order for the large official package universes. Low-volume or not-yet-
+# native registries stay in the list so they are explicitly classified rather than
+# silently disappearing from qualification.
 NATIVE_REGISTRY_ORDER = (
     "npmjs.org",
     "pypi.org",
@@ -37,6 +36,7 @@ NATIVE_REGISTRY_ORDER = (
     "nuget.org",
     "repo1.maven.org",
     "proxy.golang.org",
+    "pub.dev",
 )
 
 _REGISTRY_ECOSYSTEM = {
@@ -96,15 +96,14 @@ def _http_status(exc: Exception) -> int | None:
 class TechnologyQualificationEngine:
     """Scalable stage-1 qualification for the global technology universe.
 
-    Discovery can contain millions of package names. This engine deliberately does
-    *not* write every discovered package into technology_catalog.json and does not
-    cross-check every package against secondary services. Instead it performs one
-    native-authority resolution, stores the compact decision in SQLite, and promotes
-    only promising candidates to the next authority/documentation stage.
+    Discovery may contain millions of package names. This stage deliberately avoids
+    inserting all of them into technology_catalog.json and avoids secondary discovery
+    APIs. It resolves the package through its native authority, persists a compact
+    SQLite decision, and only promotes strong candidates to the next authority/docs
+    stage.
 
-    A candidate is resolved again only after a real upstream change requeues it, or
-    after a transient failure reaches its retry time. This keeps qualification
-    incremental and prevents repeated downloads/API work for unchanged packages.
+    Unchanged successful candidates are never resolved again. A genuine upstream
+    change can requeue them. Transient failures use persisted exponential backoff.
     """
 
     def __init__(
@@ -211,16 +210,19 @@ class TechnologyQualificationEngine:
             (scope, cursor, _iso()),
         )
 
-    def _retry_allowed(self, candidate: dict[str, Any], *, now: str) -> bool:
-        if int(candidate.get("attempts") or 0) >= self.max_attempts:
-            return False
-        if str(candidate.get("status") or "") != "RETRY":
-            return True
-        row = self.db.execute(
-            "SELECT next_retry_at FROM qualification_results WHERE registry=? AND name=?",
-            (candidate["registry"], candidate["name"]),
-        ).fetchone()
-        return not row or not row["next_retry_at"] or str(row["next_retry_at"]) <= now
+    def _eligible_sql(self) -> tuple[str, list[Any]]:
+        """SQL eligibility predicate shared by both scheduling lanes.
+
+        Filtering retry backoff in SQL is important at scale: a block of thousands of
+        sleeping RETRY rows must never make a registry appear exhausted while an
+        eligible PENDING row exists later in the same key range.
+        """
+        return (
+            "c.status IN ('PENDING','RETRY') "
+            "AND c.attempts<? "
+            "AND (c.status='PENDING' OR q.next_retry_at IS NULL OR q.next_retry_at<=?)",
+            [self.max_attempts, _iso()],
+        )
 
     def _fast_candidates(
         self,
@@ -232,29 +234,33 @@ class TechnologyQualificationEngine:
     ) -> list[dict[str, Any]]:
         if limit <= 0:
             return []
-        # The existing status/priority index makes this lane cheap even with a
-        # multi-million-row candidate table. A bounded over-read lets us skip
-        # candidates waiting for retry backoff without scanning the universe.
-        pool = self.queue.pending(limit=max(100, min(5000, limit * 20)))
-        now = _iso()
+        predicate, eligibility = self._eligible_sql()
+        where = [predicate, "c.priority>=?"]
+        params: list[Any] = [*eligibility, max(FAST_PRIORITY, int(min_priority))]
+        if registry:
+            where.append("c.registry=?")
+            params.append(registry)
+        params.append(max(1, int(limit)))
+        rows = self.db.execute(
+            """
+            SELECT c.*
+            FROM candidates AS c
+            LEFT JOIN qualification_results AS q
+              ON q.registry=c.registry AND q.name=c.name
+            WHERE """
+            + " AND ".join(where)
+            + " ORDER BY c.priority DESC,c.last_seen_at DESC,c.name ASC LIMIT ?",
+            params,
+        ).fetchall()
         out: list[dict[str, Any]] = []
-        for candidate in pool:
-            key = (str(candidate["registry"]), str(candidate["name"]))
+        for raw in rows:
+            row = dict(raw)
+            key = (str(row["registry"]), str(row["name"]))
             if key in selected_keys:
                 continue
-            if registry and key[0] != registry:
-                continue
-            priority = int(candidate.get("priority") or 0)
-            if priority < max(FAST_PRIORITY, min_priority):
-                continue
-            if not self._retry_allowed(candidate, now=now):
-                continue
-            row = dict(candidate)
             row["_qualification_lane"] = "fast"
             out.append(row)
             selected_keys.add(key)
-            if len(out) >= limit:
-                break
         return out
 
     def _fair_candidate(
@@ -266,26 +272,31 @@ class TechnologyQualificationEngine:
         selected_keys: set[tuple[str, str]],
         wrapped: bool,
     ) -> tuple[dict[str, Any] | None, str, bool]:
-        now = _iso()
+        predicate, eligibility = self._eligible_sql()
 
-        def fetch(after: str, *, before_or_equal: str | None = None) -> list[Any]:
+        def fetch(after: str, *, before_or_equal: str | None = None):
             where = [
                 "c.registry=?",
                 "c.name>?",
-                "c.status IN ('PENDING','RETRY')",
+                predicate,
                 "c.priority>=?",
-                "c.attempts<?",
             ]
-            params: list[Any] = [registry, after, int(min_priority), self.max_attempts]
+            params: list[Any] = [registry, after, *eligibility, int(min_priority)]
             if before_or_equal is not None:
                 where.append("c.name<=?")
                 params.append(before_or_equal)
-            return self.db.execute(
-                "SELECT c.* FROM candidates AS c WHERE "
+            rows = self.db.execute(
+                """
+                SELECT c.*
+                FROM candidates AS c
+                LEFT JOIN qualification_results AS q
+                  ON q.registry=c.registry AND q.name=c.name
+                WHERE """
                 + " AND ".join(where)
-                + " ORDER BY c.name ASC LIMIT 64",
+                + " ORDER BY c.name ASC LIMIT 2",
                 params,
             ).fetchall()
+            return rows
 
         rows = fetch(after_name)
         did_wrap = wrapped
@@ -296,8 +307,8 @@ class TechnologyQualificationEngine:
             candidate = dict(raw)
             key = (str(candidate["registry"]), str(candidate["name"]))
             if key in selected_keys:
-                continue
-            if not self._retry_allowed(candidate, now=now):
+                # A fast-lane item can also be the first fair-lane key. Asking for
+                # two rows lets the fair lane advance without a second query.
                 continue
             candidate["_qualification_lane"] = "fair"
             return candidate, str(candidate["name"]), did_wrap
@@ -334,13 +345,10 @@ class TechnologyQualificationEngine:
             return selected[:limit]
 
         registries = [normalized_registry] if normalized_registry else list(NATIVE_REGISTRY_ORDER)
-        if not registries:
-            return selected
-
         last_registry = self._cursor("registry-rotation")
         if last_registry in registries:
-            index = (registries.index(last_registry) + 1) % len(registries)
-            registries = registries[index:] + registries[:index]
+            offset = (registries.index(last_registry) + 1) % len(registries)
+            registries = registries[offset:] + registries[:offset]
 
         local_cursor = {reg: self._cursor(f"registry:{reg}") for reg in registries}
         wrapped = {reg: False for reg in registries}
@@ -374,8 +382,8 @@ class TechnologyQualificationEngine:
             if not made_progress:
                 break
 
-        # The rotation cursor is only a scheduling hint. Per-registry package
-        # cursors advance transactionally after each processed candidate.
+        # This cursor only rotates the first ecosystem for the next batch. Package
+        # cursors are committed only after the corresponding candidate is processed.
         if last_fair_registry:
             with self.db:
                 self._set_cursor_no_commit("registry-rotation", last_fair_registry)
@@ -528,7 +536,7 @@ class TechnologyQualificationEngine:
             self.db.execute(
                 """
                 UPDATE candidates
-                SET status='QUALIFIED', attempts=attempts+1, last_error=NULL
+                SET status='QUALIFIED',attempts=attempts+1,last_error=NULL
                 WHERE registry=? AND name=?
                 """,
                 (candidate["registry"], candidate["name"]),
@@ -539,28 +547,32 @@ class TechnologyQualificationEngine:
                     str(candidate["name"]),
                 )
 
-    def _finish_terminal(self, candidate: dict[str, Any], *, status: str, error: str) -> dict[str, Any]:
-        result = {
-            "registry": normalize_registry(str(candidate["registry"])),
+    def _terminal_result(self, candidate: dict[str, Any], status: str) -> dict[str, Any]:
+        registry = normalize_registry(str(candidate["registry"]))
+        return {
+            "registry": registry,
             "name": str(candidate["name"]),
-            "ecosystem": _REGISTRY_ECOSYSTEM.get(normalize_registry(str(candidate["registry"])), str(candidate["registry"])),
+            "ecosystem": _REGISTRY_ECOSYSTEM.get(registry, registry),
             "qualification_status": status,
             "candidate_priority": _bounded_int(candidate.get("priority")),
             "evidence": [],
             "metadata": {},
         }
+
+    def _finish_terminal(self, candidate: dict[str, Any], *, status: str, error: str) -> dict[str, Any]:
+        result = self._terminal_result(candidate, status)
         with self.db:
             self._upsert_result_no_commit(result, last_error=error)
             self.db.execute(
                 """
-                UPDATE candidates
-                SET status=?, attempts=attempts+1, last_error=?
+                UPDATE candidates SET status=?,attempts=attempts+1,last_error=?
                 WHERE registry=? AND name=?
                 """,
                 (status, str(error)[:1000], candidate["registry"], candidate["name"]),
             )
             if candidate.get("_qualification_lane") == "fair":
                 self._set_cursor_no_commit(f"registry:{candidate['registry']}", str(candidate["name"]))
+        result["last_error"] = str(error)[:1000]
         return result
 
     def _finish_retry(self, candidate: dict[str, Any], exc: Exception) -> dict[str, Any]:
@@ -571,21 +583,12 @@ class TechnologyQualificationEngine:
         )
         next_retry = _iso(_now_dt() + timedelta(seconds=delay))
         error = str(exc)[:1000]
-        result = {
-            "registry": normalize_registry(str(candidate["registry"])),
-            "name": str(candidate["name"]),
-            "ecosystem": _REGISTRY_ECOSYSTEM.get(normalize_registry(str(candidate["registry"])), str(candidate["registry"])),
-            "qualification_status": "RETRY",
-            "candidate_priority": _bounded_int(candidate.get("priority")),
-            "evidence": [],
-            "metadata": {},
-        }
+        result = self._terminal_result(candidate, "RETRY")
         with self.db:
             self._upsert_result_no_commit(result, next_retry_at=next_retry, last_error=error)
             self.db.execute(
                 """
-                UPDATE candidates
-                SET status='RETRY', attempts=attempts+1, last_error=?
+                UPDATE candidates SET status='RETRY',attempts=attempts+1,last_error=?
                 WHERE registry=? AND name=?
                 """,
                 (error, candidate["registry"], candidate["name"]),
