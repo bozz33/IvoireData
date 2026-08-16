@@ -10,6 +10,7 @@ from .http_client import HttpBudgetExceeded, http_run_context
 from .settings import Settings
 from .technology_catalog import GlobalTechnologyCatalogEngine
 from .technology_crates import CratesIndexHarvester
+from .technology_go import GoModuleIndexHarvester
 from .technology_harvester import RegistryHarvester, TechnologyHarvestQueue, qualify_pending
 from .technology_nuget import NuGetCatalogHarvester
 from .technology_wikidata import discover_wikidata_resilient
@@ -41,14 +42,15 @@ def parser() -> argparse.ArgumentParser:
     refresh.add_argument("--limit", type=int, default=0, help="0 means all known package records")
 
     harvest = sub.add_parser("harvest", help="discover package names from official bulk/change feeds into the SQLite queue")
-    harvest.add_argument("registry", help="npm, crates, nuget, packagist, packagist-changes, pypi, rubygems, pub")
+    harvest.add_argument("registry", help="npm, crates, nuget, go, packagist, packagist-changes, pypi, rubygems, pub")
     harvest.add_argument(
         "--limit",
         type=int,
         default=500,
         help=(
-            "bounded candidate/event target; npm/crates --full bound bootstrap names, "
-            "NuGet bounds catalog leaf events. 0 continues until the current snapshot is complete."
+            "bounded candidate/event target; npm/crates bound bootstrap names, NuGet bounds "
+            "Catalog leaves, Go bounds module-version index records. 0 continues until the "
+            "current snapshot is complete."
         ),
     )
     harvest.add_argument(
@@ -56,8 +58,8 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "use the complete bulk source where supported; npm uses official _all_docs, "
-            "crates uses the official crates.io Git index snapshot, and NuGet uses the "
-            "official V3 Catalog snapshot before enabling its incremental follower"
+            "crates uses the official crates.io Git index snapshot, NuGet uses the V3 "
+            "Catalog, and Go uses index.golang.org with include=all before enabling followers"
         ),
     )
     harvest.add_argument("--reset", action="store_true", help="clear the source cursor/completion state before harvesting")
@@ -163,6 +165,14 @@ def main(argv=None) -> int:
                     user_agent=settings.user_agent,
                 )
                 operation = lambda: nuget.harvest(
+                    limit=args.limit, full=args.full, reset=args.reset
+                )
+            elif key in {"go", "golang", "proxy.golang.org", "index.golang.org"}:
+                go_index = GoModuleIndexHarvester(
+                    queue=queue,
+                    user_agent=settings.user_agent,
+                )
+                operation = lambda: go_index.harvest(
                     limit=args.limit, full=args.full, reset=args.reset
                 )
             else:

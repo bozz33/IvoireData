@@ -14,6 +14,12 @@ def _json(session: requests.Session, url: str, user_agent: str) -> Any:
     return response.json()
 
 
+def _text(session: requests.Session, url: str, user_agent: str) -> str:
+    response = session.get(url, headers={"User-Agent": user_agent, "Accept": "text/plain"}, timeout=60)
+    response.raise_for_status()
+    return str(response.text or "")
+
+
 def _repo_url(value: Any) -> str | None:
     if isinstance(value, dict):
         value = value.get("url") or value.get("repository") or value.get("web")
@@ -76,13 +82,6 @@ def latest_stable(versions: list[str]) -> str | None:
 
 
 def _nuget_version_key(version: str) -> tuple[int, int, int, int] | None:
-    """Return the NuGet numeric release tuple for a stable version.
-
-    NuGet treats *any* hyphen suffix as prerelease, irrespective of labels such as
-    alpha/beta/rc. Build metadata after '+' does not make the version prerelease and is
-    ignored for precedence/normalization. NuGet supports up to four numeric release
-    components and normalizes missing components with zeroes.
-    """
     raw = str(version or "").strip()
     if not raw:
         return None
@@ -107,8 +106,27 @@ def _nuget_latest_stable(entries: list[dict[str, Any]]) -> dict[str, Any]:
             stable.append((key, index, entry))
     if not stable:
         return {}
-    # Keep deterministic registry order for numerically equivalent normalized versions.
     return max(stable, key=lambda item: (item[0], item[1]))[2]
+
+
+def _go_proxy_escape(value: str) -> str:
+    case_encoded = "".join("!" + ch.lower() if "A" <= ch <= "Z" else ch for ch in str(value))
+    return quote(case_encoded, safe="/!$&'()*+,;=:@-._~")
+
+
+def _go_release_key(version: str) -> tuple[int, int, int] | None:
+    value = str(version or "").strip()
+    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)(?:\+incompatible)?", value)
+    if not match:
+        return None
+    return tuple(int(match.group(i)) for i in (1, 2, 3))  # type: ignore[return-value]
+
+
+def _go_repository_hint(module_path: str) -> str | None:
+    parts = str(module_path or "").strip().split("/")
+    if len(parts) >= 3 and parts[0].casefold() in {"github.com", "gitlab.com"}:
+        return f"https://{parts[0].casefold()}/{parts[1]}/{parts[2]}"
+    return None
 
 
 def build_purl(registry: str, name: str, version: str | None = None) -> str | None:
@@ -121,7 +139,7 @@ def build_purl(registry: str, name: str, version: str | None = None) -> str | No
         "rubygems": "gem", "rubygems.org": "gem",
         "nuget": "nuget", "nuget.org": "nuget",
         "maven": "maven", "repo1.maven.org": "maven",
-        "go": "golang", "proxy.golang.org": "golang",
+        "go": "golang", "golang": "golang", "proxy.golang.org": "golang",
         "pub": "pub", "pub.dev": "pub",
         "hex": "hex", "hex.pm": "hex",
     }
@@ -287,6 +305,56 @@ def _nuget(session: requests.Session, name: str, user_agent: str) -> dict[str, A
     }
 
 
+def _go(session: requests.Session, name: str, user_agent: str) -> dict[str, Any]:
+    module = str(name or "").strip()
+    pkg_path = quote(module, safe="/")
+    pkg_api_url = f"https://pkg.go.dev/v1beta/module/{pkg_path}"
+    pkg_metadata: dict[str, Any] = {}
+    try:
+        payload = _json(session, pkg_api_url, user_agent)
+        if isinstance(payload, dict):
+            pkg_metadata = payload
+    except (requests.RequestException, ValueError):
+        pkg_metadata = {}
+
+    escaped = _go_proxy_escape(module)
+    list_url = f"https://proxy.golang.org/{escaped}/@v/list"
+    versions: list[str] = []
+    try:
+        versions = [line.strip() for line in _text(session, list_url, user_agent).splitlines() if line.strip()]
+    except requests.RequestException:
+        versions = []
+    stable = [(key, index, version) for index, version in enumerate(versions) if (key := _go_release_key(version)) is not None]
+    latest = max(stable, key=lambda item: (item[0], item[1]))[2] if stable else None
+
+    if latest is None:
+        api_version = str(pkg_metadata.get("version") or "").strip()
+        if _go_release_key(api_version) is not None:
+            latest = api_version
+    if latest is None:
+        latest_url = f"https://proxy.golang.org/{escaped}/@latest"
+        try:
+            payload = _json(session, latest_url, user_agent)
+            candidate = str(payload.get("Version") or "").strip()
+            if _go_release_key(candidate) is not None:
+                latest = candidate
+        except (requests.RequestException, ValueError):
+            pass
+
+    canonical_name = str(pkg_metadata.get("path") or module).strip() or module
+    repository = _repo_url(pkg_metadata.get("repoUrl")) or _go_repository_hint(canonical_name)
+    docs_url = "https://pkg.go.dev/" + quote(canonical_name, safe="/")
+    return {
+        "authority_source": "go",
+        "native_registry_url": pkg_api_url if pkg_metadata else list_url,
+        "name": canonical_name,
+        "latest_stable_version": latest,
+        "canonical_repository": repository,
+        "documentation_url": docs_url,
+        "official_website": docs_url,
+    }
+
+
 _ADAPTERS = {
     "npmjs.org": _npm,
     "pypi.org": _pypi,
@@ -294,6 +362,7 @@ _ADAPTERS = {
     "crates.io": _crates,
     "rubygems.org": _rubygems,
     "nuget.org": _nuget,
+    "proxy.golang.org": _go,
 }
 
 
