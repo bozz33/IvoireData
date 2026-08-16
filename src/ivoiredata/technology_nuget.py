@@ -313,7 +313,7 @@ class NuGetCatalogHarvester:
         return {
             "registry_candidates": int(candidate["total"] or 0),
             "active_packages": int(candidate["active"] or 0),
-            "deleted_packages": int(candidate["deleted"] or 0),
+            "registry_deleted_packages": int(candidate["deleted"] or 0),
             "version_states": int(versions["total"] or 0),
             "deleted_versions": int(versions["deleted"] or 0),
         }
@@ -367,6 +367,7 @@ class NuGetCatalogHarvester:
                 "changes_cursor": changes.get("cursor_timestamp"),
                 "processed_items": 0,
                 "pages_fetched": 0,
+                "deleted_packages": 0,
                 "http_work_required": False,
                 **self._registry_stats(),
             }
