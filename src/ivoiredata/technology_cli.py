@@ -13,7 +13,7 @@ from .technology_catalog import GlobalTechnologyCatalogEngine
 from .technology_crates import CratesIndexHarvester
 from .technology_go import GoModuleIndexHarvester
 from .technology_harvester import RegistryHarvester, TechnologyHarvestQueue, qualify_pending
-from .technology_maven import MavenCentralIndexHarvester
+from .technology_maven_runtime import MavenCentralIndexHarvester
 from .technology_nuget import NuGetCatalogHarvester
 from .technology_wikidata import discover_wikidata_resilient
 
