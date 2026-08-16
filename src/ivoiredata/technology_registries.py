@@ -110,13 +110,11 @@ def _nuget_latest_stable(entries: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _go_proxy_escape(value: str) -> str:
-    """Encode a module path exactly as required by the GOPROXY protocol."""
     case_encoded = "".join("!" + ch.lower() if "A" <= ch <= "Z" else ch for ch in str(value))
     return quote(case_encoded, safe="/!$&'()*+,;=:@-._~")
 
 
 def _go_release_key(version: str) -> tuple[int, int, int] | None:
-    """Return a Go release semver key, excluding prereleases and pseudo-versions."""
     value = str(version or "").strip()
     match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)(?:\+incompatible)?", value)
     if not match:
@@ -309,11 +307,30 @@ def _nuget(session: requests.Session, name: str, user_agent: str) -> dict[str, A
 
 def _go(session: requests.Session, name: str, user_agent: str) -> dict[str, Any]:
     module = str(name or "").strip()
+    pkg_path = quote(module, safe="/")
+    pkg_api_url = f"https://pkg.go.dev/v1beta/module/{pkg_path}"
+    pkg_metadata: dict[str, Any] = {}
+    try:
+        payload = _json(session, pkg_api_url, user_agent)
+        if isinstance(payload, dict):
+            pkg_metadata = payload
+    except (requests.RequestException, ValueError):
+        pkg_metadata = {}
+
     escaped = _go_proxy_escape(module)
     list_url = f"https://proxy.golang.org/{escaped}/@v/list"
-    versions = [line.strip() for line in _text(session, list_url, user_agent).splitlines() if line.strip()]
+    versions: list[str] = []
+    try:
+        versions = [line.strip() for line in _text(session, list_url, user_agent).splitlines() if line.strip()]
+    except requests.RequestException:
+        versions = []
     stable = [(key, index, version) for index, version in enumerate(versions) if (key := _go_release_key(version)) is not None]
     latest = max(stable, key=lambda item: (item[0], item[1]))[2] if stable else None
+
+    if latest is None:
+        api_version = str(pkg_metadata.get("version") or "").strip()
+        if _go_release_key(api_version) is not None:
+            latest = api_version
     if latest is None:
         latest_url = f"https://proxy.golang.org/{escaped}/@latest"
         try:
@@ -323,12 +340,18 @@ def _go(session: requests.Session, name: str, user_agent: str) -> dict[str, Any]
                 latest = candidate
         except (requests.RequestException, ValueError):
             pass
+
+    canonical_name = str(pkg_metadata.get("path") or module).strip() or module
+    repository = _repo_url(pkg_metadata.get("repoUrl")) or _go_repository_hint(canonical_name)
+    docs_url = "https://pkg.go.dev/" + quote(canonical_name, safe="/")
     return {
         "authority_source": "go",
-        "native_registry_url": list_url,
-        "name": module,
+        "native_registry_url": pkg_api_url if pkg_metadata else list_url,
+        "name": canonical_name,
         "latest_stable_version": latest,
-        "canonical_repository": _go_repository_hint(module),
+        "canonical_repository": repository,
+        "documentation_url": docs_url,
+        "official_website": docs_url,
     }
 
 
