@@ -167,8 +167,11 @@ def main(argv=None) -> int:
                 go_index = GoModuleIndexHarvester(queue=queue, user_agent=settings.user_agent)
                 operation = lambda: go_index.harvest(limit=args.limit, full=args.full, reset=args.reset)
             elif key in {"maven", "maven-central", "repo1.maven.org", "repo.maven.apache.org"}:
-                maven = MavenCentralIndexHarvester(queue=queue, user_agent=settings.user_agent, state_dir=settings.state_dir)
-                operation = lambda: maven.harvest(limit=args.limit, full=args.full, reset=args.reset)
+                operation = lambda: MavenCentralIndexHarvester(
+                    queue=queue,
+                    user_agent=settings.user_agent,
+                    state_dir=settings.state_dir,
+                ).harvest(limit=args.limit, full=args.full, reset=args.reset)
             else:
                 harvester = RegistryHarvester(queue=queue, user_agent=settings.user_agent)
                 operation = lambda: harvester.harvest(args.registry, limit=args.limit, full=args.full, reset=args.reset)
