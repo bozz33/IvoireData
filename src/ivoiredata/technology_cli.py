@@ -6,12 +6,14 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 from uuid import uuid4
 
+from . import technology_maven_authority as _technology_maven_authority
 from .http_client import HttpBudgetExceeded, http_run_context
 from .settings import Settings
 from .technology_catalog import GlobalTechnologyCatalogEngine
 from .technology_crates import CratesIndexHarvester
 from .technology_go import GoModuleIndexHarvester
 from .technology_harvester import RegistryHarvester, TechnologyHarvestQueue, qualify_pending
+from .technology_maven_runtime import MavenCentralIndexHarvester
 from .technology_nuget import NuGetCatalogHarvester
 from .technology_wikidata import discover_wikidata_resilient
 
@@ -42,15 +44,15 @@ def parser() -> argparse.ArgumentParser:
     refresh.add_argument("--limit", type=int, default=0, help="0 means all known package records")
 
     harvest = sub.add_parser("harvest", help="discover package names from official bulk/change feeds into the SQLite queue")
-    harvest.add_argument("registry", help="npm, crates, nuget, go, packagist, packagist-changes, pypi, rubygems, pub")
+    harvest.add_argument("registry", help="npm, crates, nuget, go, maven, packagist, packagist-changes, pypi, rubygems, pub")
     harvest.add_argument(
         "--limit",
         type=int,
         default=500,
         help=(
             "bounded candidate/event target; npm/crates bound bootstrap names, NuGet bounds "
-            "Catalog leaves, Go bounds module-version index records. 0 continues until the "
-            "current snapshot is complete."
+            "Catalog leaves, Go bounds module-version records, Maven bounds artifact index "
+            "events. 0 continues until the current snapshot is complete."
         ),
     )
     harvest.add_argument(
@@ -59,7 +61,8 @@ def parser() -> argparse.ArgumentParser:
         help=(
             "use the complete bulk source where supported; npm uses official _all_docs, "
             "crates uses the official crates.io Git index snapshot, NuGet uses the V3 "
-            "Catalog, and Go uses index.golang.org with include=all before enabling followers"
+            "Catalog, Go uses index.golang.org with include=all, and Maven uses Central's "
+            "official Maven Indexer full chunk before enabling its incremental chain"
         ),
     )
     harvest.add_argument("--reset", action="store_true", help="clear the source cursor/completion state before harvesting")
@@ -156,35 +159,23 @@ def main(argv=None) -> int:
             key = str(args.registry or "").strip().casefold()
             if key in {"crates", "crate", "cargo", "crates.io"}:
                 crates = CratesIndexHarvester(queue=queue)
-                operation = lambda: crates.harvest(
-                    limit=args.limit, full=args.full, reset=args.reset
-                )
+                operation = lambda: crates.harvest(limit=args.limit, full=args.full, reset=args.reset)
             elif key in {"nuget", "nuget.org"}:
-                nuget = NuGetCatalogHarvester(
-                    queue=queue,
-                    user_agent=settings.user_agent,
-                )
-                operation = lambda: nuget.harvest(
-                    limit=args.limit, full=args.full, reset=args.reset
-                )
+                nuget = NuGetCatalogHarvester(queue=queue, user_agent=settings.user_agent)
+                operation = lambda: nuget.harvest(limit=args.limit, full=args.full, reset=args.reset)
             elif key in {"go", "golang", "proxy.golang.org", "index.golang.org"}:
-                go_index = GoModuleIndexHarvester(
+                go_index = GoModuleIndexHarvester(queue=queue, user_agent=settings.user_agent)
+                operation = lambda: go_index.harvest(limit=args.limit, full=args.full, reset=args.reset)
+            elif key in {"maven", "maven-central", "repo1.maven.org", "repo.maven.apache.org"}:
+                operation = lambda: MavenCentralIndexHarvester(
                     queue=queue,
                     user_agent=settings.user_agent,
-                )
-                operation = lambda: go_index.harvest(
-                    limit=args.limit, full=args.full, reset=args.reset
-                )
+                    state_dir=settings.state_dir,
+                ).harvest(limit=args.limit, full=args.full, reset=args.reset)
             else:
                 harvester = RegistryHarvester(queue=queue, user_agent=settings.user_agent)
-                operation = lambda: harvester.harvest(
-                    args.registry, limit=args.limit, full=args.full, reset=args.reset
-                )
-            payload, exit_code = _network_run(
-                settings,
-                label=f"harvest-{args.registry}",
-                operation=operation,
-            )
+                operation = lambda: harvester.harvest(args.registry, limit=args.limit, full=args.full, reset=args.reset)
+            payload, exit_code = _network_run(settings, label=f"harvest-{args.registry}", operation=operation)
         elif args.command == "qualify":
             queue = _queue(settings)
             payload, exit_code = _network_run(
