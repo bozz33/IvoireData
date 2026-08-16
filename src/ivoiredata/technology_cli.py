@@ -12,6 +12,7 @@ from .settings import Settings
 from .technology_authority import OfficialAuthorityResolver
 from .technology_catalog import GlobalTechnologyCatalogEngine
 from .technology_crates import CratesIndexHarvester
+from .technology_documentation import DocumentationTargetResolver
 from .technology_go import GoModuleIndexHarvester
 from .technology_harvester import RegistryHarvester, TechnologyHarvestQueue
 from .technology_maven_runtime import MavenCentralIndexHarvester
@@ -115,7 +116,7 @@ def parser() -> argparse.ArgumentParser:
     authority.add_argument(
         "--registry",
         default=None,
-        help="optional normalized registry filter (npmjs.org, crates.io, nuget.org, repo1.maven.org, ...)",
+        help="optional registry/ecosystem filter (npm, crates, nuget, maven, go, pypi, ...)",
     )
 
     authority_audit = sub.add_parser(
@@ -123,6 +124,28 @@ def parser() -> argparse.ArgumentParser:
         help="audit authority decisions and list verified packages ready for documentation resolution",
     )
     authority_audit.add_argument("--top", type=int, default=20)
+
+    docs_targets = sub.add_parser(
+        "documentation-targets",
+        help="stage-3 materialize versioned documentation targets from AUTHORITY_VERIFIED packages",
+    )
+    docs_targets.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="positive bounded batch size; no documentation bodies are downloaded by this command",
+    )
+    docs_targets.add_argument(
+        "--registry",
+        default=None,
+        help="optional registry/ecosystem filter",
+    )
+
+    docs_targets_audit = sub.add_parser(
+        "documentation-targets-audit",
+        help="audit dynamic documentation targets grouped by language/ecosystem",
+    )
+    docs_targets_audit.add_argument("--top", type=int, default=50)
 
     bootstrap = sub.add_parser("bootstrap", help="seed languages/Wikidata and a bounded set of official registry candidates")
     bootstrap.add_argument("--language-limit", type=int, default=0, help="0 means all GitHub Linguist programming languages")
@@ -232,10 +255,7 @@ def main(argv=None) -> int:
             payload, exit_code = _network_run(settings, label=f"harvest-{args.registry}", operation=operation)
         elif args.command == "qualify":
             queue = _queue(settings)
-            qualifier = TechnologyQualificationEngine(
-                queue=queue,
-                user_agent=settings.user_agent,
-            )
+            qualifier = TechnologyQualificationEngine(queue=queue, user_agent=settings.user_agent)
             payload, exit_code = _network_run(
                 settings,
                 label="qualify",
@@ -248,16 +268,10 @@ def main(argv=None) -> int:
             )
         elif args.command == "qualification-audit":
             queue = _queue(settings)
-            payload = TechnologyQualificationEngine(
-                queue=queue,
-                user_agent=settings.user_agent,
-            ).audit(top=args.top)
+            payload = TechnologyQualificationEngine(queue=queue, user_agent=settings.user_agent).audit(top=args.top)
         elif args.command == "authority":
             queue = _queue(settings)
-            resolver = OfficialAuthorityResolver(
-                queue=queue,
-                user_agent=settings.user_agent,
-            )
+            resolver = OfficialAuthorityResolver(queue=queue, user_agent=settings.user_agent)
             payload, exit_code = _network_run(
                 settings,
                 label="authority",
@@ -265,10 +279,13 @@ def main(argv=None) -> int:
             )
         elif args.command == "authority-audit":
             queue = _queue(settings)
-            payload = OfficialAuthorityResolver(
-                queue=queue,
-                user_agent=settings.user_agent,
-            ).audit(top=args.top)
+            payload = OfficialAuthorityResolver(queue=queue, user_agent=settings.user_agent).audit(top=args.top)
+        elif args.command == "documentation-targets":
+            queue = _queue(settings)
+            payload = DocumentationTargetResolver(queue=queue).run(limit=args.limit, registry=args.registry)
+        elif args.command == "documentation-targets-audit":
+            queue = _queue(settings)
+            payload = DocumentationTargetResolver(queue=queue).audit(top=args.top)
         elif args.command == "bootstrap":
             queue = _queue(settings)
             harvester = RegistryHarvester(queue=queue, user_agent=settings.user_agent)
