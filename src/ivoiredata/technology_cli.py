@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 from uuid import uuid4
 
+from . import technology_maven_authority as _technology_maven_authority
 from .http_client import HttpBudgetExceeded, http_run_context
 from .settings import Settings
 from .technology_catalog import GlobalTechnologyCatalogEngine
@@ -158,44 +159,20 @@ def main(argv=None) -> int:
             key = str(args.registry or "").strip().casefold()
             if key in {"crates", "crate", "cargo", "crates.io"}:
                 crates = CratesIndexHarvester(queue=queue)
-                operation = lambda: crates.harvest(
-                    limit=args.limit, full=args.full, reset=args.reset
-                )
+                operation = lambda: crates.harvest(limit=args.limit, full=args.full, reset=args.reset)
             elif key in {"nuget", "nuget.org"}:
-                nuget = NuGetCatalogHarvester(
-                    queue=queue,
-                    user_agent=settings.user_agent,
-                )
-                operation = lambda: nuget.harvest(
-                    limit=args.limit, full=args.full, reset=args.reset
-                )
+                nuget = NuGetCatalogHarvester(queue=queue, user_agent=settings.user_agent)
+                operation = lambda: nuget.harvest(limit=args.limit, full=args.full, reset=args.reset)
             elif key in {"go", "golang", "proxy.golang.org", "index.golang.org"}:
-                go_index = GoModuleIndexHarvester(
-                    queue=queue,
-                    user_agent=settings.user_agent,
-                )
-                operation = lambda: go_index.harvest(
-                    limit=args.limit, full=args.full, reset=args.reset
-                )
+                go_index = GoModuleIndexHarvester(queue=queue, user_agent=settings.user_agent)
+                operation = lambda: go_index.harvest(limit=args.limit, full=args.full, reset=args.reset)
             elif key in {"maven", "maven-central", "repo1.maven.org", "repo.maven.apache.org"}:
-                maven = MavenCentralIndexHarvester(
-                    queue=queue,
-                    user_agent=settings.user_agent,
-                    state_dir=settings.state_dir,
-                )
-                operation = lambda: maven.harvest(
-                    limit=args.limit, full=args.full, reset=args.reset
-                )
+                maven = MavenCentralIndexHarvester(queue=queue, user_agent=settings.user_agent, state_dir=settings.state_dir)
+                operation = lambda: maven.harvest(limit=args.limit, full=args.full, reset=args.reset)
             else:
                 harvester = RegistryHarvester(queue=queue, user_agent=settings.user_agent)
-                operation = lambda: harvester.harvest(
-                    args.registry, limit=args.limit, full=args.full, reset=args.reset
-                )
-            payload, exit_code = _network_run(
-                settings,
-                label=f"harvest-{args.registry}",
-                operation=operation,
-            )
+                operation = lambda: harvester.harvest(args.registry, limit=args.limit, full=args.full, reset=args.reset)
+            payload, exit_code = _network_run(settings, label=f"harvest-{args.registry}", operation=operation)
         elif args.command == "qualify":
             queue = _queue(settings)
             payload, exit_code = _network_run(
