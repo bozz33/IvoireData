@@ -9,6 +9,7 @@ from uuid import uuid4
 from . import technology_maven_authority as _technology_maven_authority
 from .http_client import HttpBudgetExceeded, http_run_context
 from .settings import Settings
+from .technology_authority import OfficialAuthorityResolver
 from .technology_catalog import GlobalTechnologyCatalogEngine
 from .technology_crates import CratesIndexHarvester
 from .technology_go import GoModuleIndexHarvester
@@ -100,6 +101,28 @@ def parser() -> argparse.ArgumentParser:
         help="audit stage-1 qualification decisions and show the best authority-resolution candidates",
     )
     qualification_audit.add_argument("--top", type=int, default=20)
+
+    authority = sub.add_parser(
+        "authority",
+        help="stage-2 independent authority cross-check for READY_FOR_AUTHORITY candidates; native metadata is reused locally",
+    )
+    authority.add_argument(
+        "--limit",
+        type=int,
+        default=25,
+        help="positive bounded batch size; only promoted qualification candidates are cross-checked",
+    )
+    authority.add_argument(
+        "--registry",
+        default=None,
+        help="optional normalized registry filter (npmjs.org, crates.io, nuget.org, repo1.maven.org, ...)",
+    )
+
+    authority_audit = sub.add_parser(
+        "authority-audit",
+        help="audit authority decisions and list verified packages ready for documentation resolution",
+    )
+    authority_audit.add_argument("--top", type=int, default=20)
 
     bootstrap = sub.add_parser("bootstrap", help="seed languages/Wikidata and a bounded set of official registry candidates")
     bootstrap.add_argument("--language-limit", type=int, default=0, help="0 means all GitHub Linguist programming languages")
@@ -226,6 +249,23 @@ def main(argv=None) -> int:
         elif args.command == "qualification-audit":
             queue = _queue(settings)
             payload = TechnologyQualificationEngine(
+                queue=queue,
+                user_agent=settings.user_agent,
+            ).audit(top=args.top)
+        elif args.command == "authority":
+            queue = _queue(settings)
+            resolver = OfficialAuthorityResolver(
+                queue=queue,
+                user_agent=settings.user_agent,
+            )
+            payload, exit_code = _network_run(
+                settings,
+                label="authority",
+                operation=lambda: resolver.run(limit=args.limit, registry=args.registry),
+            )
+        elif args.command == "authority-audit":
+            queue = _queue(settings)
+            payload = OfficialAuthorityResolver(
                 queue=queue,
                 user_agent=settings.user_agent,
             ).audit(top=args.top)
