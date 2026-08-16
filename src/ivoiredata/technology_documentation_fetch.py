@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .delivery import ensure_source_layout, source_paths
@@ -126,6 +125,15 @@ class DynamicDocumentationFetcher:
             self._engine_instance = IvoireDataEngine(self.settings)
         return self._engine_instance
 
+    @staticmethod
+    def _canonical_target(target: dict[str, Any]) -> dict[str, Any]:
+        canonical = canonical_documentation_url(target.get("target_url"))
+        if not canonical:
+            raise ValueError(f"invalid documentation target URL for {target.get('registry')}:{target.get('name')}")
+        normalized = dict(target)
+        normalized["target_url"] = canonical
+        return normalized
+
     def _static_aliases(self, specs: Iterable[SourceSpec]) -> dict[str, str]:
         aliases: dict[str, str] = {}
         for spec in specs:
@@ -148,16 +156,33 @@ class DynamicDocumentationFetcher:
         try:
             ensure_source_layout(self.settings, spec)
             pipeline = get_source_pipeline(self.settings, spec)
-            details = str(pipeline.run(engine._resource_for(spec, force=force), loader_file_format="parquet"))
+            details = str(
+                pipeline.run(
+                    engine._resource_for(spec, force=force),
+                    loader_file_format="parquet",
+                )
+            )
             finished = _iso()
             engine.freshness.mark(spec.source_id, success=True, details=details)
-            engine._write_manifest(spec, status="success", started=started, finished=finished, details=details)
+            engine._write_manifest(
+                spec,
+                status="success",
+                started=started,
+                finished=finished,
+                details=details,
+            )
             return SyncResult(spec.source_id, "success", started, finished, spec.connector, details)
         except Exception as exc:
             finished = _iso()
             details = str(exc)
             engine.freshness.mark(spec.source_id, success=False, details=details)
-            engine._write_manifest(spec, status="error", started=started, finished=finished, details=details)
+            engine._write_manifest(
+                spec,
+                status="error",
+                started=started,
+                finished=finished,
+                details=details,
+            )
             return SyncResult(spec.source_id, "error", started, finished, spec.connector, details)
 
     def _run_syncer(self, spec: SourceSpec, force: bool) -> SyncResult:
@@ -212,8 +237,8 @@ class DynamicDocumentationFetcher:
             "package_purl": target.get("purl"),
             "package_registry": target.get("registry"),
             "package_name": target.get("name"),
-            # Dynamic package documentation is retained locally but never declared
-            # training-eligible until license review has happened separately.
+            # Dynamic package documentation may be retained locally, but it is never
+            # declared training-eligible until a separate rights/license review.
             "training_eligible": False,
             "license_review_status": "UNREVIEWED",
             "max_pages": 100_000,
@@ -248,23 +273,31 @@ class DynamicDocumentationFetcher:
         if str(result.status).casefold() != "success":
             return "RETRY", str(result.details or "dynamic official_docs sync failed")[:1000]
         if not stats:
-            # A successful connector run should normally produce stats. Keep it
-            # retryable rather than silently claiming corpus completeness.
             return "PARTIAL", "official_docs sync stats missing"
         failed = int(stats.get("failed") or 0)
         backlog = int(stats.get("backlog_count") or 0)
         truncated = bool(stats.get("discovery_truncated"))
-        complete = bool(stats.get("discovery_complete")) and not truncated and failed == 0 and backlog == 0
+        complete = (
+            bool(stats.get("discovery_complete"))
+            and not truncated
+            and failed == 0
+            and backlog == 0
+        )
         if complete:
             return "SUCCESS", None
-        reason = f"incomplete official docs: discovery_complete={bool(stats.get('discovery_complete'))} truncated={truncated} failed={failed} backlog={backlog}"
+        reason = (
+            "incomplete official docs: "
+            f"discovery_complete={bool(stats.get('discovery_complete'))} "
+            f"truncated={truncated} failed={failed} backlog={backlog}"
+        )
         return "PARTIAL", reason
 
     def _existing_dynamic_alias(self, target_url: str, registry: str, name: str) -> str | None:
         row = self.db.execute(
             """
             SELECT source_id FROM documentation_fetch_state
-            WHERE target_url=? AND fetch_status IN ('SUCCESS','ALIASED_STATIC_SOURCE','ALIASED_DYNAMIC_SOURCE')
+            WHERE target_url=?
+              AND fetch_status IN ('SUCCESS','ALIASED_STATIC_SOURCE','ALIASED_DYNAMIC_SOURCE')
               AND NOT (registry=? AND name=?)
             ORDER BY last_success_at DESC,source_id ASC LIMIT 1
             """,
@@ -298,8 +331,15 @@ class DynamicDocumentationFetcher:
             next_retry = _iso(_now_dt() + timedelta(seconds=delay))
         elif status in {"RETRY", "PARTIAL"} and attempts >= self.max_attempts:
             status = "REVIEW_EXHAUSTED"
-            next_retry = None
-        last_success = now if status in {"SUCCESS", "ALIASED_STATIC_SOURCE", "ALIASED_DYNAMIC_SOURCE"} else None
+
+        success_statuses = {"SUCCESS", "ALIASED_STATIC_SOURCE", "ALIASED_DYNAMIC_SOURCE"}
+        last_success = now if status in success_statuses else None
+        first_attempt_at = None
+        if previous and previous["first_attempt_at"]:
+            first_attempt_at = str(previous["first_attempt_at"])
+        elif attempted:
+            first_attempt_at = now
+
         with self.db:
             self.db.execute(
                 """
@@ -331,7 +371,7 @@ class DynamicDocumentationFetcher:
                     target["last_resolved_at"],
                     status,
                     attempts,
-                    (str(previous["first_attempt_at"]) if previous and previous["first_attempt_at"] else (now if attempted else None)),
+                    first_attempt_at,
                     now if attempted else None,
                     last_success,
                     next_retry,
@@ -355,7 +395,12 @@ class DynamicDocumentationFetcher:
         }
 
     def process(self, target: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
+        # Stage 3 normally stores canonical URLs already. Canonicalizing again at the
+        # fetch boundary makes de-duplication resilient to legacy rows/manual imports
+        # and guarantees `.../docs/` cannot be downloaded again as `.../docs`.
+        target = self._canonical_target(target)
         target_url = str(target["target_url"])
+
         static_alias = self.static_url_aliases.get(target_url)
         if static_alias:
             return self._save(
@@ -365,7 +410,11 @@ class DynamicDocumentationFetcher:
                 details="identical canonical documentation URL already covered by static official_docs source",
             )
 
-        dynamic_alias = self._existing_dynamic_alias(target_url, str(target["registry"]), str(target["name"]))
+        dynamic_alias = self._existing_dynamic_alias(
+            target_url,
+            str(target["registry"]),
+            str(target["name"]),
+        )
         if dynamic_alias:
             return self._save(
                 target,
@@ -392,7 +441,18 @@ class DynamicDocumentationFetcher:
         outcomes: list[dict[str, Any]] = []
         by_status: dict[str, int] = {}
         for target in targets:
-            outcome = self.process(target, force=force)
+            try:
+                outcome = self.process(target, force=force)
+            except ValueError as exc:
+                normalized = dict(target)
+                normalized["target_url"] = str(target.get("target_url") or "")
+                outcome = self._save(
+                    normalized,
+                    status="REVIEW_INVALID_TARGET",
+                    error=str(exc),
+                    details="target rejected before connector execution",
+                    attempted=False,
+                )
             status = str(outcome["status"])
             by_status[status] = by_status.get(status, 0) + 1
             outcomes.append(outcome)
@@ -407,6 +467,7 @@ class DynamicDocumentationFetcher:
             "partial": by_status.get("PARTIAL", 0),
             "retry": by_status.get("RETRY", 0),
             "review_exhausted": by_status.get("REVIEW_EXHAUSTED", 0),
+            "invalid": by_status.get("REVIEW_INVALID_TARGET", 0),
             "outcomes": outcomes[:100],
         }
 
@@ -419,8 +480,13 @@ class DynamicDocumentationFetcher:
         ).fetchone()
         covered = self.db.execute(
             """
-            SELECT COUNT(*) AS n FROM documentation_fetch_state
-            WHERE fetch_status IN ('SUCCESS','ALIASED_STATIC_SOURCE','ALIASED_DYNAMIC_SOURCE')
+            SELECT COUNT(*) AS n
+            FROM documentation_targets AS d
+            JOIN documentation_fetch_state AS f
+              ON f.registry=d.registry AND f.name=d.name
+            WHERE d.target_status='READY_FOR_DOCS_CONNECTOR'
+              AND f.fetch_status IN ('SUCCESS','ALIASED_STATIC_SOURCE','ALIASED_DYNAMIC_SOURCE')
+              AND f.target_resolved_at>=d.last_resolved_at
             """
         ).fetchone()
         recent = [
