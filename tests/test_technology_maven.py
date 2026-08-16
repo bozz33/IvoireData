@@ -103,8 +103,9 @@ class FakeSession:
 def _routes(full_bytes, props=None, extra=None):
     props = props or _properties()
     sha1 = hashlib.sha1(full_bytes).hexdigest()
+    property_response = props if isinstance(props, list) else FakeResponse(text=props)
     routes = {
-        MAVEN_INDEX_BASE + MAVEN_PROPERTIES: FakeResponse(text=props),
+        MAVEN_INDEX_BASE + MAVEN_PROPERTIES: property_response,
         MAVEN_INDEX_BASE + MAVEN_FULL_CHUNK + ".sha1": FakeResponse(text=sha1 + "\n"),
         MAVEN_INDEX_BASE + MAVEN_FULL_CHUNK: FakeResponse(content=full_bytes),
     }
@@ -166,7 +167,7 @@ def test_maven_bootstrap_is_pinned_bounded_and_zero_work_after_complete(tmp_path
         assert second["changes_cursor"] == 10
         assert second["registry_candidates"] == 2
         assert second["version_states"] == 2
-        assert len(session.calls) == calls_after_first  # cached full; no new HTTP
+        assert len(session.calls) == calls_after_first
 
         before = len(session.calls)
         rerun = harvester.bootstrap(limit=500)
@@ -222,8 +223,6 @@ def test_maven_incremental_chain_is_pinned_and_advances_only_when_complete(tmp_p
     base_props = _properties(last=10, retained=[10])
     target_props = _properties(last=11, timestamp="20260816110000.000 +0000", retained=[10, 11])
     routes = _routes(full, props=[FakeResponse(text=base_props), FakeResponse(text=target_props)])
-    # Replace list-valued property route explicitly; _routes normally expects text.
-    routes[MAVEN_INDEX_BASE + MAVEN_PROPERTIES] = [FakeResponse(text=base_props), FakeResponse(text=target_props)]
     routes[MAVEN_INDEX_BASE + inc_name + ".sha1"] = FakeResponse(text=hashlib.sha1(inc).hexdigest())
     routes[MAVEN_INDEX_BASE + inc_name] = FakeResponse(content=inc)
     session = FakeSession(routes)
