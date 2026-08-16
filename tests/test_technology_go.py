@@ -129,7 +129,6 @@ def test_go_bootstrap_and_follower_resume_same_timestamp_without_loss(tmp_path):
         assert second["changes_cursor"] == snapshot
         assert queue.cursor(GO_BOOTSTRAP_SOURCE)["cursor"] != first_cursor
 
-        # A completed bootstrap is a true zero-work fast path.
         calls_before = len(session.calls)
         rerun = harvester.bootstrap(limit=5000)
         assert rerun["complete"] is True
@@ -154,12 +153,9 @@ def test_go_bootstrap_and_follower_resume_same_timestamp_without_loss(tmp_path):
         assert finish["registry_candidates"] == 5
         assert finish["version_states"] == 5
 
-        # The second bootstrap request resumes at the last processed timestamp.
         assert session.calls[0][0] == GO_INDEX_URL
         assert session.calls[0][1]["params"] == {"limit": 2000, "include": "all"}
         assert session.calls[1][1]["params"]["since"] == "2026-08-16T09:00:00.000000000Z"
-        # The second incremental call replays the shared timestamp and uses after_key
-        # locally so example.com/f is not lost.
         assert session.calls[3][1]["params"]["since"] == "2026-08-16T10:15:00.000000000Z"
     finally:
         queue.close()
@@ -190,17 +186,24 @@ def test_go_full_page_stall_refuses_unsafe_cursor_advance(tmp_path, monkeypatch)
         harvester = GoModuleIndexHarvester(queue=queue, user_agent="test", session=session)
         with pytest.raises(RuntimeError, match="cursor stalled"):
             harvester.bootstrap(limit=100)
-        # Cursor is unchanged: failure is safe/replayable.
         state = json.loads(queue.cursor(GO_BOOTSTRAP_SOURCE)["cursor"])
         assert state["after_key"][1] == "example.com/b"
     finally:
         queue.close()
 
 
-def test_go_native_authority_uses_proxy_protocol_and_release_semver():
+def test_go_native_authority_uses_pkg_api_proxy_protocol_and_release_semver():
     module = "github.com/stretchr/testify"
+    pkg_api_url = "https://pkg.go.dev/v1beta/module/github.com/stretchr/testify"
     list_url = "https://proxy.golang.org/github.com/stretchr/testify/@v/list"
     session = FakeSession(routes={
+        pkg_api_url: FakeResponse(payload={
+            "path": module,
+            "version": "v1.9.0",
+            "repoUrl": "https://github.com/stretchr/testify",
+            "isLatest": True,
+            "hasGoMod": True,
+        }),
         list_url: FakeResponse(text="v1.8.4\nv1.10.0-rc.1\nv1.9.0\nv1.10.0+incompatible\n"),
     })
     metadata = native_package_metadata(
@@ -214,7 +217,8 @@ def test_go_native_authority_uses_proxy_protocol_and_release_semver():
     assert metadata["name"] == module
     assert metadata["latest_stable_version"] == "v1.10.0+incompatible"
     assert metadata["canonical_repository"] == "https://github.com/stretchr/testify"
-    assert metadata["native_registry_url"] == list_url
+    assert metadata["native_registry_url"] == pkg_api_url
+    assert metadata["documentation_url"] == "https://pkg.go.dev/github.com/stretchr/testify"
     assert build_purl("proxy.golang.org", module) == "pkg:golang/github.com/stretchr/testify"
 
 
