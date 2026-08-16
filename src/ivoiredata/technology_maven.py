@@ -8,7 +8,7 @@ import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO, Iterable
+from typing import Any, BinaryIO, Callable, Iterable
 from urllib.parse import urljoin
 
 import requests
@@ -26,6 +26,7 @@ MAVEN_CHANGES_SOURCE = "maven-central-index-changes"
 
 _INDEX_PREFIX = "nexus-maven-repository-index"
 _SHA1_RE = re.compile(r"\b([0-9a-fA-F]{40})\b")
+_DEFAULT_PARSE_COMMIT_BATCH_SIZE = 50_000
 
 
 def _cursor_json(value: Any) -> dict[str, Any]:
@@ -240,17 +241,30 @@ class MavenIndexStats:
             "pages_fetched": self.pages_fetched,
         }
 
+    def add(self, other: "MavenIndexStats") -> None:
+        for field, value in other.as_dict().items():
+            setattr(self, field, getattr(self, field) + value)
+
 
 class MavenCentralIndexHarvester:
     """Exhaustive + incremental Central discovery through the official Maven Indexer feed."""
 
-    def __init__(self, *, queue: Any, user_agent: str, state_dir: Path, session: requests.Session | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        queue: Any,
+        user_agent: str,
+        state_dir: Path,
+        session: requests.Session | None = None,
+        parse_commit_batch_size: int = _DEFAULT_PARSE_COMMIT_BATCH_SIZE,
+    ) -> None:
         self.queue = queue
         self.user_agent = user_agent
         self.state_dir = Path(state_dir)
         self.cache_dir = self.state_dir / "maven_index"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.session = session or new_session(user_agent)
+        self.parse_commit_batch_size = max(1, int(parse_commit_batch_size))
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -473,28 +487,63 @@ class MavenCentralIndexHarvester:
             self.queue.db.execute("DELETE FROM maven_package_state")
             self.queue.db.execute("DELETE FROM candidates WHERE registry=?", (MAVEN_REGISTRY,))
 
-    def _parse_chunk_bounded(self, *, path: Path, start_ordinal: int, limit: int) -> tuple[list[MavenIndexEvent], int, bool]:
-        events: list[MavenIndexEvent] = []
-        last_ordinal = start_ordinal
-        exhausted = True
+    def _stream_chunk_commits(
+        self,
+        *,
+        path: Path,
+        start_ordinal: int,
+        limit: int,
+        source: str,
+        cursor_for_ordinal: Callable[[int], dict[str, Any]],
+        requeue_changed: bool,
+    ) -> tuple[MavenIndexStats, int, bool]:
+        """Parse one gzip stream once and commit bounded event batches transactionally.
+
+        `limit=0` means exhaust the chunk, not buffer it. Every internal batch advances the
+        persisted raw ordinal in the same SQLite transaction as the artifact/package state,
+        keeping RAM bounded and making interruption replay-safe.
+        """
+        aggregate = MavenIndexStats()
+        last_ordinal = int(start_ordinal)
         target = None if int(limit) <= 0 else max(1, int(limit))
-        reader = MavenChunkReader(path)
-        iterator = iter(reader.events(start_ordinal=start_ordinal))
-        while target is None or len(events) < target:
-            try:
-                event = next(iterator)
-            except StopIteration:
+        iterator = iter(MavenChunkReader(path).events(start_ordinal=start_ordinal))
+        exhausted = False
+
+        while target is None or aggregate.processed_artifacts < target:
+            remaining = self.parse_commit_batch_size
+            if target is not None:
+                remaining = min(remaining, target - aggregate.processed_artifacts)
+            batch: list[MavenIndexEvent] = []
+            while len(batch) < remaining:
+                try:
+                    event = next(iterator)
+                except StopIteration:
+                    exhausted = True
+                    break
+                batch.append(event)
+                last_ordinal = event.ordinal
+
+            if batch:
+                stats = self._apply_events(
+                    events=batch,
+                    source=source,
+                    cursor_payload=cursor_for_ordinal(last_ordinal),
+                    requeue_changed=requeue_changed,
+                )
+                aggregate.add(stats)
+
+            if exhausted:
                 break
-            events.append(event)
-            last_ordinal = event.ordinal
-        if target is not None and len(events) >= target:
-            try:
-                next(iterator)
-            except StopIteration:
-                exhausted = True
-            else:
-                exhausted = False
-        return events, last_ordinal, exhausted
+            if target is not None and aggregate.processed_artifacts >= target:
+                try:
+                    next(iterator)
+                except StopIteration:
+                    exhausted = True
+                else:
+                    exhausted = False
+                break
+
+        return aggregate, last_ordinal, exhausted
 
     def bootstrap(self, *, limit: int = 500, reset: bool = False) -> dict[str, Any]:
         if reset:
@@ -540,9 +589,16 @@ class MavenCentralIndexHarvester:
             state = {**state, "phase": "PARSE", "chunk_sha256": sha256, "chunk_size": size}
             self.queue.set_cursor(MAVEN_BOOTSTRAP_SOURCE, cursor=_dump_cursor(state))
 
-        events, last_ordinal, exhausted = self._parse_chunk_bounded(path=path, start_ordinal=int(state.get("raw_record_ordinal") or 0), limit=limit)
+        start_ordinal = int(state.get("raw_record_ordinal") or 0)
+        stats, last_ordinal, exhausted = self._stream_chunk_commits(
+            path=path,
+            start_ordinal=start_ordinal,
+            limit=limit,
+            source=MAVEN_BOOTSTRAP_SOURCE,
+            cursor_for_ordinal=lambda ordinal: {**state, "raw_record_ordinal": ordinal},
+            requeue_changed=False,
+        )
         next_state = {**state, "raw_record_ordinal": last_ordinal}
-        stats = self._apply_events(events=events, source=MAVEN_BOOTSTRAP_SOURCE, cursor_payload=next_state, requeue_changed=False)
         if exhausted:
             next_state = {**next_state, "complete": True, "phase": "COMPLETE"}
             snapshot = next_state["snapshot"]
@@ -664,13 +720,22 @@ class MavenCentralIndexHarvester:
                 self.queue.set_cursor(MAVEN_CHANGES_SOURCE, cursor=_dump_cursor(changes))
 
             remaining = 0 if target is None else target - aggregate.processed_artifacts
-            events, last_ordinal, exhausted = self._parse_chunk_bounded(path=path, start_ordinal=int(inflight.get("raw_record_ordinal") or 0), limit=remaining if target is not None else 0)
-            next_inflight = {**inflight, "raw_record_ordinal": last_ordinal}
-            next_changes = {**changes, "inflight": next_inflight}
-            stats = self._apply_events(events=events, source=MAVEN_CHANGES_SOURCE, cursor_payload=next_changes, requeue_changed=True)
-            for field, value in stats.as_dict().items():
-                setattr(aggregate, field, getattr(aggregate, field) + value)
-            changes = next_changes
+            base_changes = changes
+            base_inflight = inflight
+            stats, last_ordinal, exhausted = self._stream_chunk_commits(
+                path=path,
+                start_ordinal=int(inflight.get("raw_record_ordinal") or 0),
+                limit=remaining if target is not None else 0,
+                source=MAVEN_CHANGES_SOURCE,
+                cursor_for_ordinal=lambda ordinal, base=base_changes, item=base_inflight: {
+                    **base,
+                    "inflight": {**item, "raw_record_ordinal": ordinal},
+                },
+                requeue_changed=True,
+            )
+            aggregate.add(stats)
+            inflight = {**inflight, "raw_record_ordinal": last_ordinal}
+            changes = {**changes, "inflight": inflight}
 
             if not exhausted:
                 break
