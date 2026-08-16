@@ -33,8 +33,6 @@ def _repo_url(value: Any) -> str | None:
         return "https://github.com" + parsed.path.rstrip("/")
     if parsed.hostname in {"gitlab.com", "www.gitlab.com"}:
         return "https://gitlab.com" + parsed.path.rstrip("/")
-    # Called only for fields whose semantics already mean source repository.
-    # Keep HTTPS repositories on Bitbucket, Codeberg, SourceHut or self-hosted Git valid.
     if parsed.scheme and parsed.netloc:
         return url.rstrip("/")
     return None
@@ -75,6 +73,42 @@ def _version_key(version: str) -> tuple[int, ...]:
 def latest_stable(versions: list[str]) -> str | None:
     stable = [str(v) for v in versions if v and not _is_prerelease(str(v))]
     return max(stable, key=_version_key) if stable else None
+
+
+def _nuget_version_key(version: str) -> tuple[int, int, int, int] | None:
+    """Return the NuGet numeric release tuple for a stable version.
+
+    NuGet treats *any* hyphen suffix as prerelease, irrespective of labels such as
+    alpha/beta/rc. Build metadata after '+' does not make the version prerelease and is
+    ignored for precedence/normalization. NuGet supports up to four numeric release
+    components and normalizes missing components with zeroes.
+    """
+    raw = str(version or "").strip()
+    if not raw:
+        return None
+    core = raw.split("+", 1)[0]
+    if "-" in core:
+        return None
+    parts = core.split(".")
+    if not 1 <= len(parts) <= 4 or any(not part.isdigit() for part in parts):
+        return None
+    values = [int(part) for part in parts]
+    values += [0] * (4 - len(values))
+    return tuple(values)  # type: ignore[return-value]
+
+
+def _nuget_latest_stable(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    stable: list[tuple[tuple[int, int, int, int], int, dict[str, Any]]] = []
+    for index, entry in enumerate(entries):
+        if not entry.get("listed", True):
+            continue
+        key = _nuget_version_key(str(entry.get("version") or ""))
+        if key is not None:
+            stable.append((key, index, entry))
+    if not stable:
+        return {}
+    # Keep deterministic registry order for numerically equivalent normalized versions.
+    return max(stable, key=lambda item: (item[0], item[1]))[2]
 
 
 def build_purl(registry: str, name: str, version: str | None = None) -> str | None:
@@ -237,10 +271,10 @@ def _nuget(session: requests.Session, name: str, user_agent: str) -> dict[str, A
                 entry = leaf.get("catalogEntry")
                 if isinstance(entry, dict):
                     leaves.append(entry)
-    stable = [entry for entry in leaves if entry.get("version") and entry.get("listed", True) and not _is_prerelease(str(entry["version"]))]
-    current = max(stable, key=lambda item: _version_key(str(item.get("version")))) if stable else (leaves[-1] if leaves else {})
+    current = _nuget_latest_stable(leaves)
+    if not current:
+        current = leaves[-1] if leaves else {}
     project = current.get("projectUrl")
-    # NuGet projectUrl is a project/home page, never repository evidence.
     repo = _repo_url(current.get("repository"))
     return {
         "authority_source": "nuget",
