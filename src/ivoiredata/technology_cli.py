@@ -13,6 +13,7 @@ from .technology_authority import OfficialAuthorityResolver
 from .technology_catalog import GlobalTechnologyCatalogEngine
 from .technology_crates import CratesIndexHarvester
 from .technology_documentation import DocumentationTargetResolver
+from .technology_documentation_fetch import DynamicDocumentationFetcher
 from .technology_go import GoModuleIndexHarvester
 from .technology_harvester import RegistryHarvester, TechnologyHarvestQueue
 from .technology_maven_runtime import MavenCentralIndexHarvester
@@ -80,22 +81,9 @@ def parser() -> argparse.ArgumentParser:
         default=50,
         help="positive bounded batch size; deliberately no unlimited mode for multi-million-package qualification",
     )
-    qualify.add_argument(
-        "--registry",
-        default=None,
-        help="optional registry/ecosystem filter (npm, crates, nuget, maven, go, pypi, ...)",
-    )
-    qualify.add_argument(
-        "--min-priority",
-        type=int,
-        default=0,
-        help="ignore candidates below this discovery priority",
-    )
-    qualify.add_argument(
-        "--fast-only",
-        action="store_true",
-        help="process only high-priority change/seed candidates (priority >= 70)",
-    )
+    qualify.add_argument("--registry", default=None, help="optional registry/ecosystem filter")
+    qualify.add_argument("--min-priority", type=int, default=0, help="ignore candidates below this discovery priority")
+    qualify.add_argument("--fast-only", action="store_true", help="process only high-priority change/seed candidates")
 
     qualification_audit = sub.add_parser(
         "qualification-audit",
@@ -107,17 +95,8 @@ def parser() -> argparse.ArgumentParser:
         "authority",
         help="stage-2 independent authority cross-check for READY_FOR_AUTHORITY candidates; native metadata is reused locally",
     )
-    authority.add_argument(
-        "--limit",
-        type=int,
-        default=25,
-        help="positive bounded batch size; only promoted qualification candidates are cross-checked",
-    )
-    authority.add_argument(
-        "--registry",
-        default=None,
-        help="optional registry/ecosystem filter (npm, crates, nuget, maven, go, pypi, ...)",
-    )
+    authority.add_argument("--limit", type=int, default=25, help="positive bounded promoted-candidate batch size")
+    authority.add_argument("--registry", default=None, help="optional registry/ecosystem filter")
 
     authority_audit = sub.add_parser(
         "authority-audit",
@@ -129,23 +108,37 @@ def parser() -> argparse.ArgumentParser:
         "documentation-targets",
         help="stage-3 materialize versioned documentation targets from AUTHORITY_VERIFIED packages",
     )
-    docs_targets.add_argument(
-        "--limit",
-        type=int,
-        default=100,
-        help="positive bounded batch size; no documentation bodies are downloaded by this command",
-    )
-    docs_targets.add_argument(
-        "--registry",
-        default=None,
-        help="optional registry/ecosystem filter",
-    )
+    docs_targets.add_argument("--limit", type=int, default=100, help="positive bounded target-resolution batch size")
+    docs_targets.add_argument("--registry", default=None, help="optional registry/ecosystem filter")
 
     docs_targets_audit = sub.add_parser(
         "documentation-targets-audit",
         help="audit dynamic documentation targets grouped by language/ecosystem",
     )
     docs_targets_audit.add_argument("--top", type=int, default=50)
+
+    docs_fetch = sub.add_parser(
+        "documentation-fetch",
+        help="stage-4 fetch a bounded set of READY documentation targets through the existing official_docs connector",
+    )
+    docs_fetch.add_argument(
+        "--limit",
+        type=int,
+        default=1,
+        help="positive bounded source count; defaults to one documentation source per run",
+    )
+    docs_fetch.add_argument("--registry", default=None, help="optional registry/ecosystem filter")
+    docs_fetch.add_argument(
+        "--force",
+        action="store_true",
+        help="pass force to the standard official_docs connector; normal runs should leave this disabled",
+    )
+
+    docs_fetch_audit = sub.add_parser(
+        "documentation-fetch-audit",
+        help="audit dynamic documentation fetch coverage, aliases, retries and incomplete backlogs",
+    )
+    docs_fetch_audit.add_argument("--top", type=int, default=50)
 
     bootstrap = sub.add_parser("bootstrap", help="seed languages/Wikidata and a bounded set of official registry candidates")
     bootstrap.add_argument("--language-limit", type=int, default=0, help="0 means all GitHub Linguist programming languages")
@@ -194,12 +187,7 @@ def _network_run(
         with context:
             payload = operation()
     except HttpBudgetExceeded as exc:
-        return {
-            "status": "PARTIAL_BUDGET",
-            "error": str(exc),
-            "http": context.snapshot(),
-        }, 2
-
+        return {"status": "PARTIAL_BUDGET", "error": str(exc), "http": context.snapshot()}, 2
     metrics = context.snapshot()
     if isinstance(payload, dict):
         payload = {**payload, "http": metrics}
@@ -226,11 +214,7 @@ def main(argv=None) -> int:
         elif args.command == "catalog":
             payload = engine.catalog(limit=args.limit, verified_only=args.verified_only, min_importance=args.min_importance)
         elif args.command == "refresh":
-            payload, exit_code = _network_run(
-                settings,
-                label="refresh",
-                operation=lambda: engine.refresh_packages(limit=args.limit),
-            )
+            payload, exit_code = _network_run(settings, label="refresh", operation=lambda: engine.refresh_packages(limit=args.limit))
         elif args.command == "harvest":
             queue = _queue(settings)
             key = str(args.registry or "").strip().casefold()
@@ -286,6 +270,17 @@ def main(argv=None) -> int:
         elif args.command == "documentation-targets-audit":
             queue = _queue(settings)
             payload = DocumentationTargetResolver(queue=queue).audit(top=args.top)
+        elif args.command == "documentation-fetch":
+            queue = _queue(settings)
+            fetcher = DynamicDocumentationFetcher(queue=queue, settings=settings)
+            payload, exit_code = _network_run(
+                settings,
+                label="documentation-fetch",
+                operation=lambda: fetcher.run(limit=args.limit, registry=args.registry, force=args.force),
+            )
+        elif args.command == "documentation-fetch-audit":
+            queue = _queue(settings)
+            payload = DynamicDocumentationFetcher(queue=queue, settings=settings).audit(top=args.top)
         elif args.command == "bootstrap":
             queue = _queue(settings)
             harvester = RegistryHarvester(queue=queue, user_agent=settings.user_agent)
