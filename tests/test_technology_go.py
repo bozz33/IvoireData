@@ -11,10 +11,13 @@ from ivoiredata.technology_go import (
     GO_CHANGES_SOURCE,
     GO_INDEX_URL,
     GoModuleIndexHarvester,
-    _go_proxy_escape,
 )
 from ivoiredata.technology_harvester import TechnologyHarvestQueue
-from ivoiredata.technology_registries import build_purl, native_package_metadata
+from ivoiredata.technology_registries import (
+    _go_proxy_escape,
+    build_purl,
+    native_package_metadata,
+)
 
 
 class FakeResponse:
