@@ -12,9 +12,10 @@ from .settings import Settings
 from .technology_catalog import GlobalTechnologyCatalogEngine
 from .technology_crates import CratesIndexHarvester
 from .technology_go import GoModuleIndexHarvester
-from .technology_harvester import RegistryHarvester, TechnologyHarvestQueue, qualify_pending
+from .technology_harvester import RegistryHarvester, TechnologyHarvestQueue
 from .technology_maven_runtime import MavenCentralIndexHarvester
 from .technology_nuget import NuGetCatalogHarvester
+from .technology_qualification import TechnologyQualificationEngine
 from .technology_wikidata import discover_wikidata_resilient
 
 
@@ -67,8 +68,38 @@ def parser() -> argparse.ArgumentParser:
     )
     harvest.add_argument("--reset", action="store_true", help="clear the source cursor/completion state before harvesting")
 
-    qualify = sub.add_parser("qualify", help="resolve pending harvested candidates through native registries + cross-checks")
-    qualify.add_argument("--limit", type=int, default=50)
+    qualify = sub.add_parser(
+        "qualify",
+        help="stage-1 native qualification/prioritization of harvested candidates without inflating the JSON catalog",
+    )
+    qualify.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="positive bounded batch size; deliberately no unlimited mode for multi-million-package qualification",
+    )
+    qualify.add_argument(
+        "--registry",
+        default=None,
+        help="optional registry/ecosystem filter (npm, crates, nuget, maven, go, pypi, ...)",
+    )
+    qualify.add_argument(
+        "--min-priority",
+        type=int,
+        default=0,
+        help="ignore candidates below this discovery priority",
+    )
+    qualify.add_argument(
+        "--fast-only",
+        action="store_true",
+        help="process only high-priority change/seed candidates (priority >= 70)",
+    )
+
+    qualification_audit = sub.add_parser(
+        "qualification-audit",
+        help="audit stage-1 qualification decisions and show the best authority-resolution candidates",
+    )
+    qualification_audit.add_argument("--top", type=int, default=20)
 
     bootstrap = sub.add_parser("bootstrap", help="seed languages/Wikidata and a bounded set of official registry candidates")
     bootstrap.add_argument("--language-limit", type=int, default=0, help="0 means all GitHub Linguist programming languages")
@@ -178,11 +209,26 @@ def main(argv=None) -> int:
             payload, exit_code = _network_run(settings, label=f"harvest-{args.registry}", operation=operation)
         elif args.command == "qualify":
             queue = _queue(settings)
+            qualifier = TechnologyQualificationEngine(
+                queue=queue,
+                user_agent=settings.user_agent,
+            )
             payload, exit_code = _network_run(
                 settings,
                 label="qualify",
-                operation=lambda: qualify_pending(queue=queue, catalog_engine=engine, limit=args.limit),
+                operation=lambda: qualifier.run(
+                    limit=args.limit,
+                    registry=args.registry,
+                    min_priority=args.min_priority,
+                    fast_only=args.fast_only,
+                ),
             )
+        elif args.command == "qualification-audit":
+            queue = _queue(settings)
+            payload = TechnologyQualificationEngine(
+                queue=queue,
+                user_agent=settings.user_agent,
+            ).audit(top=args.top)
         elif args.command == "bootstrap":
             queue = _queue(settings)
             harvester = RegistryHarvester(queue=queue, user_agent=settings.user_agent)
