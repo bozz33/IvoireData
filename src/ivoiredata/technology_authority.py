@@ -15,6 +15,7 @@ from .technology_discovery import (
     _extract_docs,
     _extract_repository,
     _first,
+    normalize_registry,
     normalize_repository_url,
     officiality_score,
     officiality_status,
@@ -69,9 +70,8 @@ class OfficialAuthorityResolver:
     that exact evidence and only calls independent secondary sources. Consequently an
     authority pass never redownloads npm/PyPI/crates/NuGet/Maven/Go native metadata.
 
-    A package is revisited only when its qualification timestamp is newer than the
-    authority decision (a real upstream requeue/change) or when a persisted transient
-    retry becomes due.
+    A package is revisited only after a real stage-1 requalification or when a
+    persisted transient cross-check retry becomes due.
     """
 
     def __init__(
@@ -226,23 +226,28 @@ class OfficialAuthorityResolver:
     def _ready_rows(self, *, limit: int, registry: str | None = None) -> list[dict[str, Any]]:
         if int(limit) <= 0:
             raise ValueError("authority resolution is intentionally bounded; --limit must be > 0")
-        # If qualification_results does not exist SQLite raises a clear operational
-        # error, which is preferable to inventing authority decisions without stage 1.
+        normalized_registry = normalize_registry(registry) if registry else None
+        # c.attempts is a durable fallback generation signal. q.last_checked_at normally
+        # detects requalification, while the attempts comparison also catches a real
+        # requeue+qualification that happens within the same one-second timestamp tick.
         where = [
             "q.qualification_status='READY_FOR_AUTHORITY'",
             "(a.registry IS NULL OR q.last_checked_at>a.qualification_checked_at "
+            "OR (a.attempts=1 AND c.attempts>a.attempts) "
             "OR (a.authority_status='AUTHORITY_PARTIAL_RETRY' AND a.attempts<? "
             "AND (a.next_retry_at IS NULL OR a.next_retry_at<=?)))",
         ]
         params: list[Any] = [self.max_attempts, _iso()]
-        if registry:
+        if normalized_registry:
             where.append("q.registry=?")
-            params.append(registry)
+            params.append(normalized_registry)
         params.append(int(limit))
         rows = self.db.execute(
             """
-            SELECT q.*
+            SELECT q.*,c.attempts AS candidate_attempts
             FROM qualification_results AS q
+            JOIN candidates AS c
+              ON c.registry=q.registry AND c.name=q.name
             LEFT JOIN authority_results AS a
               ON a.registry=q.registry AND a.name=q.name
             WHERE """
@@ -489,6 +494,9 @@ class OfficialAuthorityResolver:
         ecosystem_rows = self.db.execute(
             "SELECT ecosystem,COUNT(*) AS n FROM authority_results GROUP BY ecosystem ORDER BY n DESC"
         ).fetchall()
+        verified_count_row = self.db.execute(
+            "SELECT COUNT(*) AS n FROM authority_results WHERE authority_status='AUTHORITY_VERIFIED'"
+        ).fetchone()
         verified = [
             dict(row)
             for row in self.db.execute(
@@ -509,6 +517,6 @@ class OfficialAuthorityResolver:
             "authority_records": sum(int(row["n"]) for row in status_rows),
             "by_status": {str(row["authority_status"]): int(row["n"]) for row in status_rows},
             "by_ecosystem": {str(row["ecosystem"] or "UNKNOWN"): int(row["n"]) for row in ecosystem_rows},
-            "verified_ready_for_docs": len(verified),
+            "verified_ready_for_docs": int(verified_count_row["n"] if verified_count_row else 0),
             "top_verified": verified,
         }
