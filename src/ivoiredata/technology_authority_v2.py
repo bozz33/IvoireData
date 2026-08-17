@@ -13,9 +13,25 @@ from .technology_discovery import (
     normalize_registry,
     normalize_repository_url,
 )
-from .technology_qualification_v2 import _sanitize_native_for_policy
+from .technology_qualification_v2 import (
+    _is_registry_landing_url,
+    _sanitize_native_for_policy,
+)
 
 RepositoryIdentityResolver = Callable[[str], dict[str, Any] | None]
+
+_DOC_FIELDS = (
+    "documentation_url",
+    "documentation",
+    "docs_url",
+    "documentation_uri",
+    "readme_url",
+)
+_HOMEPAGE_FIELDS = (
+    "homepage",
+    "homepage_url",
+    "project_url",
+)
 
 
 def _github_slug(repository: str | None) -> tuple[str, str] | None:
@@ -32,6 +48,61 @@ def _github_slug(repository: str | None) -> tuple[str, str] | None:
     if len(parts) < 2:
         return None
     return parts[0], parts[1]
+
+
+def _contains_weak_landing(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_contains_weak_landing(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_contains_weak_landing(item) for item in value)
+    return _is_registry_landing_url(value)
+
+
+def _sanitize_ecosystems_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    cleaned = dict(payload)
+    for key in (*_DOC_FIELDS, *_HOMEPAGE_FIELDS):
+        if key in cleaned and _contains_weak_landing(cleaned.get(key)):
+            cleaned[key] = None
+    metadata = cleaned.get("metadata")
+    if isinstance(metadata, dict):
+        cleaned["metadata"] = _sanitize_ecosystems_payload(metadata)
+    return cleaned
+
+
+def _sanitize_crosscheck_for_policy(cross: dict[str, Any]) -> dict[str, Any]:
+    """Remove known package/aggregation landing pages from secondary URL evidence.
+
+    Native Maven metadata is sanitized separately, but ecosyste.ms/deps.dev can expose
+    generated package-documentation landing pages. Those are useful discovery hints,
+    not evidence that the host is the project's official documentation authority.
+    """
+    cleaned = dict(cross)
+    ecosystems = cross.get("ecosystems")
+    if isinstance(ecosystems, dict):
+        cleaned["ecosystems"] = _sanitize_ecosystems_payload(ecosystems)
+    links = cross.get("deps_links")
+    if isinstance(links, dict):
+        links_copy = dict(links)
+        for key in ("DOCUMENTATION", "HOMEPAGE"):
+            if _contains_weak_landing(links_copy.get(key)):
+                links_copy.pop(key, None)
+        cleaned["deps_links"] = links_copy
+    return cleaned
+
+
+def _sanitize_authority_result_for_policy(result: dict[str, Any]) -> dict[str, Any]:
+    cleaned = dict(result)
+    evidence = list(cleaned.get("evidence") or [])
+    if _is_registry_landing_url(cleaned.get("documentation_url")):
+        cleaned["documentation_url"] = None
+        if "REGISTRY_LANDING_REJECTED_AS_DOCUMENTATION" not in evidence:
+            evidence.append("REGISTRY_LANDING_REJECTED_AS_DOCUMENTATION")
+    if _is_registry_landing_url(cleaned.get("official_website")):
+        cleaned["official_website"] = None
+        if "REGISTRY_LANDING_REJECTED_AS_OFFICIAL_WEBSITE" not in evidence:
+            evidence.append("REGISTRY_LANDING_REJECTED_AS_OFFICIAL_WEBSITE")
+    cleaned["evidence"] = evidence
+    return cleaned
 
 
 class OfficialAuthorityResolver(_BaseAuthorityResolver):
@@ -167,17 +238,22 @@ class OfficialAuthorityResolver(_BaseAuthorityResolver):
         cross: dict[str, Any],
     ) -> dict[str, Any]:
         policy_native = _sanitize_native_for_policy(str(row.get("registry") or ""), native)
-        first = super()._decision(row, policy_native, cross)
+        policy_cross = _sanitize_crosscheck_for_policy(cross)
+        first = _sanitize_authority_result_for_policy(
+            super()._decision(row, policy_native, policy_cross)
+        )
         if first.get("authority_status") != "AUTHORITY_CONFLICT":
             return first
 
         reconciled_native, reconciled_cross, transfer = self._reconcile_repository_transfer(
             policy_native,
-            cross,
+            policy_cross,
         )
         if transfer is None:
             return first
-        result = super()._decision(row, reconciled_native, reconciled_cross)
+        result = _sanitize_authority_result_for_policy(
+            super()._decision(row, reconciled_native, reconciled_cross)
+        )
         evidence = list(result.get("evidence") or [])
         marker = "GITHUB_REPOSITORY_TRANSFER_MATCH"
         if marker not in evidence:
