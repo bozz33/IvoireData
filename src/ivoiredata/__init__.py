@@ -1,6 +1,6 @@
 """IvoireData Engine."""
 
-__version__ = "0.8.5"
+__version__ = "0.8.6"
 
 # Load discovery-refresh hardening before engine imports the base connector.
 from .connectors import official_docs_refresh as _official_docs_refresh  # noqa: F401,E402

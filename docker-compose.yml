@@ -1,4 +1,4 @@
-# IvoireData v0.8.5 — déploiement local CI Gold avec synchronisation upstream incrémentale.
+# IvoireData v0.8.6 — déploiement local CI Gold avec synchronisation upstream incrémentale.
 # Les données, overrides, cache upstream, Artifact Ledger et qualification restent sur la machine hôte.
 # Le pipeline corpus/tokenizer reste downstream.
 
@@ -12,6 +12,19 @@ x-engine-env: &engine-env
   # bodies use the authenticated Git Blob REST endpoint instead of raw.githubusercontent.com.
   GITHUB_TOKEN: ${GITHUB_TOKEN:-}
   GH_TOKEN: ${GH_TOKEN:-}
+  # Industrial technology orchestrator. The worker is opt-in through the `technology`
+  # compose profile; these values only bound each cycle and never trigger a registry bootstrap.
+  IVOIREDATA_TECH_ORCHESTRATOR_INTERVAL: ${IVOIREDATA_TECH_ORCHESTRATOR_INTERVAL:-900}
+  IVOIREDATA_TECH_QUALIFICATION_BUDGET: ${IVOIREDATA_TECH_QUALIFICATION_BUDGET:-90}
+  IVOIREDATA_TECH_AUTHORITY_BUDGET: ${IVOIREDATA_TECH_AUTHORITY_BUDGET:-36}
+  IVOIREDATA_TECH_TARGET_BUDGET: ${IVOIREDATA_TECH_TARGET_BUDGET:-180}
+  IVOIREDATA_TECH_DISCOVERY_BUDGET: ${IVOIREDATA_TECH_DISCOVERY_BUDGET:-18}
+  IVOIREDATA_TECH_FETCH_BUDGET: ${IVOIREDATA_TECH_FETCH_BUDGET:-9}
+  IVOIREDATA_TECH_QUALIFICATION_QUANTUM: ${IVOIREDATA_TECH_QUALIFICATION_QUANTUM:-10}
+  IVOIREDATA_TECH_AUTHORITY_QUANTUM: ${IVOIREDATA_TECH_AUTHORITY_QUANTUM:-4}
+  IVOIREDATA_TECH_TARGET_QUANTUM: ${IVOIREDATA_TECH_TARGET_QUANTUM:-20}
+  IVOIREDATA_TECH_DISCOVERY_QUANTUM: ${IVOIREDATA_TECH_DISCOVERY_QUANTUM:-2}
+  IVOIREDATA_TECH_FETCH_QUANTUM: ${IVOIREDATA_TECH_FETCH_QUANTUM:-1}
 
 x-engine-volumes: &engine-volumes
   - ./data_lake:/app/data_lake
@@ -37,7 +50,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.5
+    image: ivoiredata:0.8.6
     restart: unless-stopped
     environment: *engine-env
     volumes: *engine-volumes
@@ -59,10 +72,28 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.5
+    image: ivoiredata:0.8.6
     restart: unless-stopped
     profiles: ["run"]
     command: ["ivoiredata", "scheduler"]
+    environment: *engine-env
+    volumes: *engine-volumes
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+
+  technology-scheduler:
+    build:
+      context: .
+      args:
+        PUID: ${PUID:-1000}
+        PGID: ${PGID:-1000}
+    image: ivoiredata:0.8.6
+    restart: unless-stopped
+    profiles: ["technology"]
+    command: ["ivoiredata-tech-orchestrator", "loop"]
     environment: *engine-env
     volumes: *engine-volumes
     depends_on:
@@ -77,7 +108,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.5
+    image: ivoiredata:0.8.6
     profiles: ["sync"]
     command: ["ivoiredata", "scheduler", "--once"]
     environment: *engine-env
