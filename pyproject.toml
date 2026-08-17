@@ -23,7 +23,7 @@ dev = ["pytest>=8.0"]
 [project.scripts]
 ivoiredata = "ivoiredata.cli:main"
 ivoiredata-tech = "ivoiredata.technology_cli:main"
-ivoiredata-tech-orchestrator = "ivoiredata.technology_orchestrator:main"
+ivoiredata-tech-orchestrator = "ivoiredata.technology_orchestrator_runtime:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 [tool.pytest.ini_options]
