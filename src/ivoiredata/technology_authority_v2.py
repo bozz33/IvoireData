@@ -13,6 +13,7 @@ from .technology_discovery import (
     normalize_registry,
     normalize_repository_url,
 )
+from .technology_qualification_v2 import _sanitize_native_for_policy
 
 RepositoryIdentityResolver = Callable[[str], dict[str, Any] | None]
 
@@ -41,6 +42,10 @@ class OfficialAuthorityResolver(_BaseAuthorityResolver):
     conflict. When (and only when) GitHub repository URLs disagree, this resolver asks
     GitHub for their immutable repository identity. Equal repository IDs convert the
     apparent conflict into corroborating evidence; different IDs remain blocked.
+
+    Legacy Maven metadata is also policy-sanitized before every authority decision so
+    an old persisted Central artifact landing page can never be reintroduced as a
+    project website or documentation URL after qualification recalibration removed it.
     """
 
     def __init__(
@@ -161,11 +166,15 @@ class OfficialAuthorityResolver(_BaseAuthorityResolver):
         native: dict[str, Any],
         cross: dict[str, Any],
     ) -> dict[str, Any]:
-        first = super()._decision(row, native, cross)
+        policy_native = _sanitize_native_for_policy(str(row.get("registry") or ""), native)
+        first = super()._decision(row, policy_native, cross)
         if first.get("authority_status") != "AUTHORITY_CONFLICT":
             return first
 
-        reconciled_native, reconciled_cross, transfer = self._reconcile_repository_transfer(native, cross)
+        reconciled_native, reconciled_cross, transfer = self._reconcile_repository_transfer(
+            policy_native,
+            cross,
+        )
         if transfer is None:
             return first
         result = super()._decision(row, reconciled_native, reconciled_cross)
@@ -242,7 +251,9 @@ class OfficialAuthorityResolver(_BaseAuthorityResolver):
             "engine": "official-authority-v2",
             "rechecked": len(outcomes),
             "by_status": dict(sorted(by_status.items())),
-            "resolved_conflicts": sum(1 for item in outcomes if item["status"] != "AUTHORITY_CONFLICT"),
+            "resolved_conflicts": sum(
+                1 for item in outcomes if item["status"] != "AUTHORITY_CONFLICT"
+            ),
             "remaining_conflicts": by_status.get("AUTHORITY_CONFLICT", 0),
             "outcomes": outcomes[:100],
         }

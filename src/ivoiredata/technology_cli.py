@@ -13,7 +13,8 @@ from .technology_authority_v2 import OfficialAuthorityResolver
 from .technology_catalog import GlobalTechnologyCatalogEngine
 from .technology_crates import CratesIndexHarvester
 from .technology_documentation import DocumentationTargetResolver
-from .technology_documentation_fetch import DynamicDocumentationFetcher
+from .technology_documentation_discovery_runtime import ActiveDocumentationDiscovery
+from .technology_documentation_fetch_v2 import DynamicDocumentationFetcher
 from .technology_go import GoModuleIndexHarvester
 from .technology_harvester import RegistryHarvester, TechnologyHarvestQueue
 from .technology_maven_runtime import MavenCentralIndexHarvester
@@ -25,7 +26,7 @@ from .technology_wikidata import discover_wikidata_resilient
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ivoiredata-tech",
-        description="IvoireData global technology discovery, authority resolution, harvesting and catalog engine",
+        description="IvoireData global technology discovery, authority resolution, harvesting and documentation engine",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -131,6 +132,24 @@ def parser() -> argparse.ArgumentParser:
     )
     docs_targets_audit.add_argument("--top", type=int, default=50)
 
+    docs_discover = sub.add_parser(
+        "documentation-discover",
+        help="stage-3b actively discover canonical docs from verified repositories/sites; rejects registry landing pages",
+    )
+    docs_discover.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="positive bounded discovery batch size",
+    )
+    docs_discover.add_argument("--registry", default=None, help="optional registry/ecosystem filter")
+
+    docs_discovery_audit = sub.add_parser(
+        "documentation-discovery-audit",
+        help="audit active documentation discovery, unresolved targets and rejected registry landing pages",
+    )
+    docs_discovery_audit.add_argument("--top", type=int, default=50)
+
     docs_fetch = sub.add_parser(
         "documentation-fetch",
         help="stage-4 fetch a bounded set of READY documentation targets through the existing official_docs connector",
@@ -150,7 +169,7 @@ def parser() -> argparse.ArgumentParser:
 
     docs_fetch_audit = sub.add_parser(
         "documentation-fetch-audit",
-        help="audit dynamic documentation fetch coverage, aliases, retries and incomplete backlogs",
+        help="audit dynamic documentation fetch coverage, target migrations, aliases, retries and incomplete backlogs",
     )
     docs_fetch_audit.add_argument("--top", type=int, default=50)
 
@@ -298,6 +317,20 @@ def main(argv=None) -> int:
         elif args.command == "documentation-targets-audit":
             queue = _queue(settings)
             payload = DocumentationTargetResolver(queue=queue).audit(top=args.top)
+        elif args.command == "documentation-discover":
+            queue = _queue(settings)
+            discovery = ActiveDocumentationDiscovery(queue=queue, user_agent=settings.user_agent)
+            payload, exit_code = _network_run(
+                settings,
+                label="documentation-discover",
+                operation=lambda: discovery.run(limit=args.limit, registry=args.registry),
+            )
+        elif args.command == "documentation-discovery-audit":
+            queue = _queue(settings)
+            payload = ActiveDocumentationDiscovery(
+                queue=queue,
+                user_agent=settings.user_agent,
+            ).audit(top=args.top)
         elif args.command == "documentation-fetch":
             queue = _queue(settings)
             fetcher = DynamicDocumentationFetcher(queue=queue, settings=settings)
