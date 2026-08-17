@@ -9,7 +9,7 @@ from uuid import uuid4
 from . import technology_maven_authority as _technology_maven_authority
 from .http_client import HttpBudgetExceeded, http_run_context
 from .settings import Settings
-from .technology_authority import OfficialAuthorityResolver
+from .technology_authority_v2 import OfficialAuthorityResolver
 from .technology_catalog import GlobalTechnologyCatalogEngine
 from .technology_crates import CratesIndexHarvester
 from .technology_documentation import DocumentationTargetResolver
@@ -18,7 +18,7 @@ from .technology_go import GoModuleIndexHarvester
 from .technology_harvester import RegistryHarvester, TechnologyHarvestQueue
 from .technology_maven_runtime import MavenCentralIndexHarvester
 from .technology_nuget import NuGetCatalogHarvester
-from .technology_qualification import TechnologyQualificationEngine
+from .technology_qualification_v2 import TechnologyQualificationEngine
 from .technology_wikidata import discover_wikidata_resilient
 
 
@@ -85,6 +85,13 @@ def parser() -> argparse.ArgumentParser:
     qualify.add_argument("--min-priority", type=int, default=0, help="ignore candidates below this discovery priority")
     qualify.add_argument("--fast-only", action="store_true", help="process only high-priority change/seed candidates")
 
+    recalibrate = sub.add_parser(
+        "qualification-recalibrate",
+        help="recompute stored qualification policy from local metadata only; performs zero registry requests",
+    )
+    recalibrate.add_argument("--limit", type=int, default=1000, help="positive bounded stored-result batch size")
+    recalibrate.add_argument("--registry", default=None, help="optional registry/ecosystem filter")
+
     qualification_audit = sub.add_parser(
         "qualification-audit",
         help="audit stage-1 qualification decisions and show the best authority-resolution candidates",
@@ -97,6 +104,13 @@ def parser() -> argparse.ArgumentParser:
     )
     authority.add_argument("--limit", type=int, default=25, help="positive bounded promoted-candidate batch size")
     authority.add_argument("--registry", default=None, help="optional registry/ecosystem filter")
+
+    authority_recheck = sub.add_parser(
+        "authority-recheck-conflicts",
+        help="recheck persisted authority conflicts and reconcile legitimate GitHub repository transfers/renames",
+    )
+    authority_recheck.add_argument("--limit", type=int, default=25, help="positive bounded conflict batch size")
+    authority_recheck.add_argument("--registry", default=None, help="optional registry/ecosystem filter")
 
     authority_audit = sub.add_parser(
         "authority-audit",
@@ -250,6 +264,12 @@ def main(argv=None) -> int:
                     fast_only=args.fast_only,
                 ),
             )
+        elif args.command == "qualification-recalibrate":
+            queue = _queue(settings)
+            payload = TechnologyQualificationEngine(queue=queue, user_agent=settings.user_agent).recalibrate(
+                limit=args.limit,
+                registry=args.registry,
+            )
         elif args.command == "qualification-audit":
             queue = _queue(settings)
             payload = TechnologyQualificationEngine(queue=queue, user_agent=settings.user_agent).audit(top=args.top)
@@ -260,6 +280,14 @@ def main(argv=None) -> int:
                 settings,
                 label="authority",
                 operation=lambda: resolver.run(limit=args.limit, registry=args.registry),
+            )
+        elif args.command == "authority-recheck-conflicts":
+            queue = _queue(settings)
+            resolver = OfficialAuthorityResolver(queue=queue, user_agent=settings.user_agent)
+            payload, exit_code = _network_run(
+                settings,
+                label="authority-recheck-conflicts",
+                operation=lambda: resolver.recheck_conflicts(limit=args.limit, registry=args.registry),
             )
         elif args.command == "authority-audit":
             queue = _queue(settings)
