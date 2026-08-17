@@ -104,6 +104,47 @@ class DynamicDocumentationFetcher(_BaseFetcher):
             )
         self.db.commit()
 
+    def _eligible_targets(self, *, limit: int, registry: str | None = None) -> list[dict[str, Any]]:
+        """Select changed roots even when their previous generation is already SUCCESS.
+
+        Timestamp-only eligibility is insufficient because target discovery and fetch
+        state are second-resolution timestamps. A target can change from a registry
+        landing page to canonical docs in the same timestamp tick and therefore look
+        "covered" even though the canonical URL is different. URL inequality is the
+        durable migration signal and changed roots are deliberately ordered before the
+        ordinary uncovered backlog.
+        """
+        if int(limit) <= 0:
+            raise ValueError("dynamic documentation fetching is intentionally bounded; --limit must be > 0")
+        where = [
+            "d.target_status='READY_FOR_DOCS_CONNECTOR'",
+            "d.target_url IS NOT NULL",
+            "(f.registry IS NULL OR d.target_url<>f.target_url "
+            "OR d.last_resolved_at>f.target_resolved_at "
+            "OR (f.fetch_status IN ('RETRY','PARTIAL') AND f.attempts<? "
+            "AND (f.next_retry_at IS NULL OR f.next_retry_at<=?)))",
+        ]
+        params: list[Any] = [self.max_attempts, _now_iso()]
+        if registry:
+            from .technology_discovery import normalize_registry
+
+            where.append("d.registry=?")
+            params.append(normalize_registry(registry))
+        params.append(int(limit))
+        rows = self.db.execute(
+            """
+            SELECT d.*
+            FROM documentation_targets AS d
+            LEFT JOIN documentation_fetch_state AS f
+              ON f.registry=d.registry AND f.name=d.name
+            WHERE """
+            + " AND ".join(where)
+            + " ORDER BY CASE WHEN f.registry IS NOT NULL AND d.target_url<>f.target_url THEN 0 ELSE 1 END,"
+              " d.programming_language ASC,d.registry ASC,d.name ASC LIMIT ?",
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     @staticmethod
     def _physical_source_id(target: dict[str, Any]) -> str:
         logical = str(target["source_id"])
@@ -311,6 +352,17 @@ class DynamicDocumentationFetcher(_BaseFetcher):
             WHERE migration_status='PENDING'
             """
         ).fetchone()
+        due_count = self.db.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM documentation_targets AS d
+            JOIN documentation_fetch_state AS f
+              ON f.registry=d.registry AND f.name=d.name
+            WHERE d.target_status='READY_FOR_DOCS_CONNECTOR'
+              AND d.target_url IS NOT NULL
+              AND d.target_url<>f.target_url
+            """
+        ).fetchone()
         migrations = [
             dict(row)
             for row in self.db.execute(
@@ -330,6 +382,9 @@ class DynamicDocumentationFetcher(_BaseFetcher):
         )
         payload["pending_target_migrations"] = int(
             pending_count["n"] if pending_count else 0
+        )
+        payload["due_target_migrations"] = int(
+            due_count["n"] if due_count else 0
         )
         payload["recent_target_migrations"] = migrations
         return payload

@@ -14,6 +14,8 @@ _REGISTRY_LANDING_HOSTS = {
     "search.maven.org",
     "repo1.maven.org",
     "repo.maven.apache.org",
+    "appdoc.app",
+    "www.appdoc.app",
 }
 
 
