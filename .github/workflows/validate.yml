@@ -20,3 +20,5 @@ jobs:
       - run: ivoiredata programming-docs audit
       - run: ivoiredata-tech --help
       - run: ivoiredata-tech harvest-audit
+      - run: ivoiredata-tech-orchestrator --help
+      - run: ivoiredata-tech-orchestrator audit --top 3
