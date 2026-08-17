@@ -1,4 +1,4 @@
-# IvoireData v0.8.4 — déploiement local CI Gold avec synchronisation upstream incrémentale.
+# IvoireData v0.8.5 — déploiement local CI Gold avec synchronisation upstream incrémentale.
 # Les données, overrides, cache upstream, Artifact Ledger et qualification restent sur la machine hôte.
 # Le pipeline corpus/tokenizer reste downstream.
 
@@ -8,6 +8,10 @@ x-engine-env: &engine-env
   IVOIREDATA_DATASET_NAME: ${IVOIREDATA_DATASET_NAME:-ivoiredata}
   IVOIREDATA_PIPELINE_NAME: ${IVOIREDATA_PIPELINE_NAME:-ivoiredata_engine}
   IVOIREDATA_SCHEDULER_INTERVAL: ${IVOIREDATA_SCHEDULER_INTERVAL:-}
+  # Optional read-only GitHub credentials. When configured, official Git documentation
+  # bodies use the authenticated Git Blob REST endpoint instead of raw.githubusercontent.com.
+  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+  GH_TOKEN: ${GH_TOKEN:-}
 
 x-engine-volumes: &engine-volumes
   - ./data_lake:/app/data_lake
@@ -33,7 +37,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.4
+    image: ivoiredata:0.8.5
     restart: unless-stopped
     environment: *engine-env
     volumes: *engine-volumes
@@ -55,7 +59,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.4
+    image: ivoiredata:0.8.5
     restart: unless-stopped
     profiles: ["run"]
     command: ["ivoiredata", "scheduler"]
@@ -73,7 +77,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.4
+    image: ivoiredata:0.8.5
     profiles: ["sync"]
     command: ["ivoiredata", "scheduler", "--once"]
     environment: *engine-env
