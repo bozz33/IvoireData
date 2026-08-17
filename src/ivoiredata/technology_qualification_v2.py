@@ -9,7 +9,12 @@ from .technology_qualification import TechnologyQualificationEngine as _BaseQual
 
 
 _MAVEN_REGISTRY = "repo1.maven.org"
-_REGISTRY_LANDING_HOSTS = {"central.sonatype.com", "search.maven.org", "repo1.maven.org", "repo.maven.apache.org"}
+_REGISTRY_LANDING_HOSTS = {
+    "central.sonatype.com",
+    "search.maven.org",
+    "repo1.maven.org",
+    "repo.maven.apache.org",
+}
 
 
 def _is_registry_landing_url(value: Any) -> bool:
@@ -71,6 +76,51 @@ class TechnologyQualificationEngine(_BaseQualificationEngine):
 
         return result
 
+    def _overwrite_policy_nullable_fields(self, result: dict[str, Any]) -> None:
+        """Persist policy corrections that intentionally set evidence fields to NULL.
+
+        The v1 generic upsert protects previously known non-null URLs with COALESCE.
+        That is appropriate for ordinary refreshes, but a policy migration must be able
+        to remove a URL that is now known to be a registry landing page rather than
+        project documentation. Keep this narrow and explicit instead of weakening the
+        v1 refresh semantics globally.
+        """
+        self.db.execute(
+            """
+            UPDATE qualification_results
+            SET documentation_url=?,
+                official_website=?,
+                canonical_repository=?,
+                native_officiality_score=?,
+                native_officiality_status=?,
+                qualification_score=?,
+                qualification_tier=?,
+                qualification_status=?,
+                candidate_priority=?,
+                evidence_json=?
+            WHERE registry=? AND name=?
+            """,
+            (
+                result.get("documentation_url"),
+                result.get("official_website"),
+                result.get("canonical_repository"),
+                int(result.get("native_officiality_score") or 0),
+                result.get("native_officiality_status"),
+                int(result.get("qualification_score") or 0),
+                result.get("qualification_tier"),
+                result.get("qualification_status"),
+                int(result.get("candidate_priority") or 0),
+                json.dumps(
+                    result.get("evidence") or [],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                result["registry"],
+                result["name"],
+            ),
+        )
+
     def recalibrate(
         self,
         *,
@@ -84,7 +134,9 @@ class TechnologyQualificationEngine(_BaseQualificationEngine):
         without re-downloading maven-metadata.xml or POM files.
         """
         if int(limit) <= 0:
-            raise ValueError("qualification recalibration is intentionally bounded; --limit must be > 0")
+            raise ValueError(
+                "qualification recalibration is intentionally bounded; --limit must be > 0"
+            )
         normalized = normalize_registry(registry) if registry else None
         where = ["q.qualification_status NOT IN ('NOT_FOUND','DEFERRED_UNSUPPORTED')"]
         params: list[Any] = []
@@ -119,7 +171,9 @@ class TechnologyQualificationEngine(_BaseQualificationEngine):
             candidate = {
                 "registry": row["registry"],
                 "name": row["name"],
-                "priority": int(row.get("live_priority") or row.get("candidate_priority") or 0),
+                "priority": int(
+                    row.get("live_priority") or row.get("candidate_priority") or 0
+                ),
             }
             result = self._decision(candidate, native)
             after = str(result.get("qualification_status") or "UNKNOWN")
@@ -128,6 +182,7 @@ class TechnologyQualificationEngine(_BaseQualificationEngine):
             result["metadata"] = native
             with self.db:
                 self._upsert_result_no_commit(result)
+                self._overwrite_policy_nullable_fields(result)
             by_before[before] = by_before.get(before, 0) + 1
             by_after[after] = by_after.get(after, 0) + 1
             if before != after:
