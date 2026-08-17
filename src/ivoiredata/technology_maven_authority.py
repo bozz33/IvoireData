@@ -166,6 +166,7 @@ def maven_package_metadata(
     repository = None
     project_url = None
     description = None
+    pom_url = None
     if release:
         encoded_version = quote(release, safe="._+-")
         pom_url = f"{base}{encoded_version}/{artifact_path}-{encoded_version}.pom"
@@ -193,14 +194,20 @@ def maven_package_metadata(
     )
     if release:
         portal += "/" + quote(release, safe="._+-")
+
+    # Central's artifact page is a registry landing page, not the project's
+    # documentation. Keeping it in a separate field prevents qualification/docs
+    # stages from mistaking a one-page package record for the official manual.
     return {
         "authority_source": "maven",
         "native_registry_url": metadata_url,
+        "registry_landing_url": portal,
+        "pom_url": pom_url,
         "name": canonical_name,
         "latest_stable_version": release,
         "canonical_repository": repository,
-        "documentation_url": portal,
-        "official_website": project_url or portal,
+        "documentation_url": None,
+        "official_website": project_url,
         "description": description,
     }
 
