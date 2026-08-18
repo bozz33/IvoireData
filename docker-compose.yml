@@ -1,4 +1,4 @@
-# IvoireData v0.8.7 — déploiement local CI Gold avec synchronisation upstream incrémentale.
+# IvoireData v0.8.9 — déploiement local CI Gold avec synchronisation upstream incrémentale.
 # Les données, overrides, cache upstream, Artifact Ledger et qualification restent sur la machine hôte.
 # Le pipeline corpus/tokenizer reste downstream.
 
@@ -29,6 +29,11 @@ x-engine-env: &engine-env
   # a 6-hour network hang, and one target cannot hold an industrial cycle forever.
   IVOIREDATA_TECH_FETCH_LOCK_TIMEOUT: ${IVOIREDATA_TECH_FETCH_LOCK_TIMEOUT:-120}
   IVOIREDATA_TECH_FETCH_TARGET_TIMEOUT: ${IVOIREDATA_TECH_FETCH_TARGET_TIMEOUT:-900}
+  # Official web documentation transport. Requests uses separate connect/read socket
+  # inactivity timeouts; the target watchdog remains the independent wall-clock guard.
+  IVOIREDATA_DOCS_CONNECT_TIMEOUT: ${IVOIREDATA_DOCS_CONNECT_TIMEOUT:-6.1}
+  IVOIREDATA_DOCS_READ_TIMEOUT: ${IVOIREDATA_DOCS_READ_TIMEOUT:-30}
+  IVOIREDATA_DOCS_DEADLINE_RESERVE: ${IVOIREDATA_DOCS_DEADLINE_RESERVE:-10}
 
 x-engine-volumes: &engine-volumes
   - ./data_lake:/app/data_lake
@@ -54,7 +59,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.7
+    image: ivoiredata:0.8.9
     restart: unless-stopped
     environment: *engine-env
     volumes: *engine-volumes
@@ -76,7 +81,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.7
+    image: ivoiredata:0.8.9
     restart: unless-stopped
     profiles: ["run"]
     command: ["ivoiredata", "scheduler"]
@@ -94,7 +99,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.7
+    image: ivoiredata:0.8.9
     restart: unless-stopped
     profiles: ["technology"]
     command: ["ivoiredata-tech-orchestrator", "loop"]
@@ -112,7 +117,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.7
+    image: ivoiredata:0.8.9
     profiles: ["sync"]
     command: ["ivoiredata", "scheduler", "--once"]
     environment: *engine-env
