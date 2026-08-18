@@ -29,14 +29,43 @@ def _pipeline_name(base: str, source_id: str) -> str:
     return f"{base}_{suffix}"[:120]
 
 
+def _source_lock_timeout(spec: SourceSpec | None = None) -> float:
+    """Resolve the lock wait independently from HTTP/network timeouts.
+
+    Historically every source could wait 21,600 seconds (6h) for its dlt/file lock.
+    That is acceptable for some large manual CI jobs, but disastrous for the bounded
+    technology worker because an idle lock wait looks like a network hang and keeps an
+    orchestrator cycle RUNNING for hours.  Dynamic callers can now set a much shorter
+    per-source timeout while existing sources retain the legacy environment/default.
+    """
+
+    configured = None
+    if spec is not None:
+        configured = spec.options.get("source_lock_timeout_seconds")
+    if configured in (None, ""):
+        configured = os.getenv("IVOIREDATA_SOURCE_LOCK_TIMEOUT") or 21600
+    try:
+        return max(1.0, float(configured))
+    except (TypeError, ValueError):
+        return 21600.0
+
+
 class _SafePipelineProxy:
     """Delegate to dlt while isolating tables and serializing one source at a time."""
 
-    def __init__(self, pipeline: Any, *, protect_partial_replace: bool,
-                 lock_path: Path | None = None, post_success: Callable[[], Any] | None = None):
+    def __init__(
+        self,
+        pipeline: Any,
+        *,
+        protect_partial_replace: bool,
+        lock_path: Path | None = None,
+        lock_timeout_seconds: float | None = None,
+        post_success: Callable[[], Any] | None = None,
+    ):
         self._pipeline = pipeline
         self._protect_partial_replace = protect_partial_replace
         self._lock_path = lock_path
+        self._lock_timeout_seconds = lock_timeout_seconds
         self._post_success = post_success
 
     def __getattr__(self, name: str):
@@ -53,10 +82,12 @@ class _SafePipelineProxy:
     def run(self, data: Any, *args: Any, **kwargs: Any):
         if self._lock_path is None:
             return self._run(data, *args, **kwargs)
-        timeout = float(os.getenv("IVOIREDATA_SOURCE_LOCK_TIMEOUT") or 21600)
+        timeout = self._lock_timeout_seconds
+        if timeout is None:
+            timeout = _source_lock_timeout(None)
         # API, scheduler and sync-once share `.ivoiredata`; only the same source is
         # serialized. Different sources remain free to run independently.
-        with file_lock(self._lock_path, timeout=max(1.0, timeout)):
+        with file_lock(self._lock_path, timeout=max(1.0, float(timeout))):
             return self._run(data, *args, **kwargs)
 
 
@@ -105,11 +136,13 @@ def get_source_pipeline(settings: Settings, spec: SourceSpec):
 
     def post_success():
         from .post_sync import cleanup_after_success
+
         cleanup_after_success(settings, spec)
 
     return _SafePipelineProxy(
         pipeline,
         protect_partial_replace=spec.connector in _INCREMENTAL_PARTIAL_CONNECTORS,
         lock_path=settings.state_dir / "locks" / f"{_SAFE.sub('_', spec.source_id)}.lock",
+        lock_timeout_seconds=_source_lock_timeout(spec),
         post_success=post_success,
     )

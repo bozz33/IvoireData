@@ -1,6 +1,6 @@
 """IvoireData Engine."""
 
-__version__ = "0.8.6"
+__version__ = "0.8.7"
 
 # Load discovery-refresh hardening before engine imports the base connector.
 from .connectors import official_docs_refresh as _official_docs_refresh  # noqa: F401,E402
@@ -14,6 +14,10 @@ from .connectors import official_git_versions as _official_git_versions  # noqa:
 # Preserve canonical Git tree subdirectories and use rate-safe authenticated GitHub blob
 # transport when credentials are configured.
 from .connectors import official_git_hardening as _official_git_hardening  # noqa: F401,E402
+
+# Bound dynamic documentation source-lock waits and enforce a hard per-target wall clock
+# deadline so non-network dlt/lock stalls cannot keep an industrial worker alive for hours.
+from . import technology_fetch_watchdog as _technology_fetch_watchdog  # noqa: F401,E402
 
 # Observe every source sync in the physical Artifact Ledger without coupling connectors
 # to SQLite or changing CI Gold semantics.

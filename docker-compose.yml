@@ -1,4 +1,4 @@
-# IvoireData v0.8.6 — déploiement local CI Gold avec synchronisation upstream incrémentale.
+# IvoireData v0.8.7 — déploiement local CI Gold avec synchronisation upstream incrémentale.
 # Les données, overrides, cache upstream, Artifact Ledger et qualification restent sur la machine hôte.
 # Le pipeline corpus/tokenizer reste downstream.
 
@@ -25,6 +25,10 @@ x-engine-env: &engine-env
   IVOIREDATA_TECH_TARGET_QUANTUM: ${IVOIREDATA_TECH_TARGET_QUANTUM:-20}
   IVOIREDATA_TECH_DISCOVERY_QUANTUM: ${IVOIREDATA_TECH_DISCOVERY_QUANTUM:-2}
   IVOIREDATA_TECH_FETCH_QUANTUM: ${IVOIREDATA_TECH_FETCH_QUANTUM:-1}
+  # Dynamic documentation-specific safety. A source-lock conflict must never look like
+  # a 6-hour network hang, and one target cannot hold an industrial cycle forever.
+  IVOIREDATA_TECH_FETCH_LOCK_TIMEOUT: ${IVOIREDATA_TECH_FETCH_LOCK_TIMEOUT:-120}
+  IVOIREDATA_TECH_FETCH_TARGET_TIMEOUT: ${IVOIREDATA_TECH_FETCH_TARGET_TIMEOUT:-900}
 
 x-engine-volumes: &engine-volumes
   - ./data_lake:/app/data_lake
@@ -50,7 +54,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.6
+    image: ivoiredata:0.8.7
     restart: unless-stopped
     environment: *engine-env
     volumes: *engine-volumes
@@ -72,7 +76,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.6
+    image: ivoiredata:0.8.7
     restart: unless-stopped
     profiles: ["run"]
     command: ["ivoiredata", "scheduler"]
@@ -90,7 +94,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.6
+    image: ivoiredata:0.8.7
     restart: unless-stopped
     profiles: ["technology"]
     command: ["ivoiredata-tech-orchestrator", "loop"]
@@ -108,7 +112,7 @@ services:
       args:
         PUID: ${PUID:-1000}
         PGID: ${PGID:-1000}
-    image: ivoiredata:0.8.6
+    image: ivoiredata:0.8.7
     profiles: ["sync"]
     command: ["ivoiredata", "scheduler", "--once"]
     environment: *engine-env
