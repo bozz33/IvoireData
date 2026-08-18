@@ -13,6 +13,7 @@ jobs:
       - run: python scripts/validate_seed_facts.py
       - run: python -m compileall -q src scripts
       - run: pytest -q
+      - run: ivoiredata --version
       - run: ivoiredata --help
       - run: ivoiredata artifacts audit
       - run: ivoiredata data-gouv --help
