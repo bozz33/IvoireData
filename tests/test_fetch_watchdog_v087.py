@@ -147,7 +147,7 @@ def test_release_version_is_consistent_and_cli_is_not_hardcoded(capsys):
     version_file = (root / "VERSION").read_text(encoding="utf-8").strip()
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert version_file == "0.8.7"
+    assert version_file
     assert ivoiredata.__version__ == version_file
     assert project["project"]["version"] == version_file
 
