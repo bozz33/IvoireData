@@ -1,9 +1,13 @@
 """IvoireData Engine."""
 
-__version__ = "0.8.7"
+__version__ = "0.8.8"
 
 # Load discovery-refresh hardening before engine imports the base connector.
 from .connectors import official_docs_refresh as _official_docs_refresh  # noqa: F401,E402
+
+# Keep shared documentation hosts inside the resolved project subtree. Nested targets
+# must not inherit origin-global sitemaps/robots discovery from sibling projects.
+from .connectors import official_docs_scope as _official_docs_scope  # noqa: F401,E402
 
 # Route canonical GitHub documentation trees through the zero-redownload Git connector.
 from .connectors import official_docs_strategy as _official_docs_strategy  # noqa: F401,E402
