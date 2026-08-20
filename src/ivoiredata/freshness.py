@@ -36,6 +36,29 @@ class FreshnessStore:
         last = parse_time(self.data.get(spec.source_id, {}).get("last_success"))
         return last is None or now >= last + timedelta(hours=spec.refresh_hours)
 
+    def status(self, spec: SourceSpec, now: datetime | None = None) -> dict:
+        self.refresh()
+        now = now or datetime.now(timezone.utc)
+        row = self.data.get(spec.source_id, {})
+        if not isinstance(row, dict):
+            row = {}
+        last_success = parse_time(row.get("last_success"))
+        is_due = last_success is None or now >= last_success + timedelta(hours=spec.refresh_hours)
+        last_status = str(row.get("last_status") or "").casefold()
+        if last_status == "error":
+            status = "STALE" if last_success else "NEVER_SYNCED"
+        elif last_success is None:
+            status = "NEVER_SYNCED"
+        else:
+            status = "DUE" if is_due else "FRESH"
+        return {
+            "status": status,
+            "due": is_due,
+            "last_attempt": row.get("last_attempt"),
+            "last_success": row.get("last_success"),
+            "last_status": row.get("last_status"),
+        }
+
     def mark(self, source_id: str, *, success: bool, now: datetime | None = None, details: str = "") -> None:
         now = now or datetime.now(timezone.utc)
         with file_lock(self.lock_path, timeout=60):
