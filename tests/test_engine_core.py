@@ -56,6 +56,15 @@ def test_freshness(tmp_path):
     store.mark("x", success=True, now=now)
     assert not store.due(source, now + timedelta(hours=23))
     assert store.due(source, now + timedelta(hours=25))
+    assert store.status(source, now + timedelta(hours=23))["status"] == "FRESH"
+    assert store.status(source, now + timedelta(hours=25))["status"] == "DUE"
+
+
+def test_freshness_status_after_failed_first_attempt(tmp_path):
+    store = FreshnessStore(tmp_path / "state.json")
+    source = spec(refresh_hours=24)
+    store.mark("x", success=False, now=datetime(2026, 8, 9, tzinfo=timezone.utc))
+    assert store.status(source)["status"] == "NEVER_SYNCED"
 
 
 def test_clean_dedup_quality():
